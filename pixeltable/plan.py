@@ -128,6 +128,10 @@ class Analyzer:
             where_clause_conjuncts, self.filter = where_clause.split_conjuncts(self.sql_elements.contains)
             self.sql_where_clause = exprs.CompoundPredicate.make_conjunction(where_clause_conjuncts)
 
+        # Check here that all where filters were successfully translated to SQL
+        # if sample_clause is not None and self.filter is not None:
+        #     raise excs.Error('where clauses used with sampling must be translateable to SQL')
+
         # all exprs that are evaluated in Python; not executable
         self.all_exprs = self.select_list.copy()
         for join_clause in from_clause.join_clauses:

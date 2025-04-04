@@ -14,12 +14,14 @@ import pandas as pd
 import sqlalchemy as sql
 
 from pixeltable import catalog, exceptions as excs, exec, exprs, plan, type_system as ts
-from pixeltable.catalog import is_valid_identifier
+from pixeltable.catalog import TableVersionHandle, is_valid_identifier
 from pixeltable.catalog.globals import UpdateStatus
 from pixeltable.env import Env
+from pixeltable.exprs.hash_op import HashOp
 from pixeltable.type_system import ColumnType
 from pixeltable.utils.description_helper import DescriptionHelper
 from pixeltable.utils.formatter import Formatter
+from pixeltable.utils.sample import SampleX
 
 if TYPE_CHECKING:
     import torch
@@ -139,6 +141,7 @@ class DataFrame:
     grouping_tbl: Optional[catalog.TableVersion]
     order_by_clause: Optional[list[tuple[exprs.Expr, bool]]]
     limit_val: Optional[exprs.Expr]
+    sample_clause: Optional[SampleX]
 
     def __init__(
         self,
@@ -149,6 +152,7 @@ class DataFrame:
         grouping_tbl: Optional[catalog.TableVersion] = None,
         order_by_clause: Optional[list[tuple[exprs.Expr, bool]]] = None,  # list[(expr, asc)]
         limit: Optional[exprs.Expr] = None,
+        sample_clause: Optional[SampleX] = None,
     ):
         self._from_clause = from_clause
 
@@ -168,6 +172,7 @@ class DataFrame:
         self.grouping_tbl = grouping_tbl
         self.order_by_clause = copy.deepcopy(order_by_clause)
         self.limit_val = limit
+        self.sample_clause = sample_clause
 
     @classmethod
     def _normalize_select_list(
@@ -236,6 +241,28 @@ class DataFrame:
                 raise excs.Error(f'Multiple definitions of parameter {var.name}')
         return unique_vars
 
+    @classmethod
+    def _convert_int_param(cls, v: Optional[Any], required: bool, name: str) -> Optional[exprs.Expr]:
+        if v is None:
+            if required:
+                raise excs.Error(f'{name!r} parameter must be present')
+            return v
+        v_expr = exprs.Expr.from_object(v)
+        if not v_expr.col_type.is_int_type():
+            raise excs.Error(f'{name!r} parameter must be of type int, instead of {v_expr.col_type}')
+        return v_expr
+
+    @classmethod
+    def _convert_float_param(cls, v: Optional[Any], required: bool, name: str) -> Optional[exprs.Expr]:
+        if v is None:
+            if required:
+                raise excs.Error(f'{name!r} parameter must be present')
+            return v
+        v_expr = exprs.Expr.from_object(v)
+        if not v_expr.col_type.is_float_type():
+            raise excs.Error(f'{name!r} parameter must be of type float, instead of {v_expr.col_type}')
+        return v_expr
+
     def parameters(self) -> dict[str, ColumnType]:
         """Return a dict mapping parameter name to parameter type.
 
@@ -300,6 +327,8 @@ class DataFrame:
         return len(self._from_clause.join_clauses) > 0
 
     def show(self, n: int = 20) -> DataFrameResultSet:
+        if self.sample_clause is not None:
+            raise excs.Error('show() cannot be used with sample()')
         assert n is not None
         return self.limit(n).collect()
 
@@ -322,6 +351,8 @@ class DataFrame:
             raise excs.Error('head() cannot be used with order_by()')
         if self._has_joins():
             raise excs.Error('head() not supported for joins')
+        if self.sample_clause is not None:
+            raise excs.Error('head() cannot be used with sample()')
         num_rowid_cols = len(self._first_tbl.tbl_version.get().store_tbl.rowid_columns())
         order_by_clause = [exprs.RowidRef(self._first_tbl.tbl_version, idx) for idx in range(num_rowid_cols)]
         return self.order_by(*order_by_clause, asc=True).limit(n).collect()
@@ -345,6 +376,8 @@ class DataFrame:
             raise excs.Error('tail() cannot be used with order_by()')
         if self._has_joins():
             raise excs.Error('tail() not supported for joins')
+        if self.sample_clause is not None:
+            raise excs.Error('tail() cannot be used with sample()')
         num_rowid_cols = len(self._first_tbl.tbl_version.get().store_tbl.rowid_columns())
         order_by_clause = [exprs.RowidRef(self._first_tbl.tbl_version, idx) for idx in range(num_rowid_cols)]
         result = self.order_by(*order_by_clause, asc=False).limit(n).collect()
@@ -437,6 +470,8 @@ class DataFrame:
                 raise excs.Error(f'Error during SQL execution:\n{e}') from e
 
     def collect(self) -> DataFrameResultSet:
+        #        if self.sample_clause is not None:
+        #            raise excs.Error('sample() is not implemented')
         return DataFrameResultSet(list(self._output_row_iterator()), self.schema)
 
     async def _acollect(self) -> DataFrameResultSet:
@@ -503,6 +538,9 @@ class DataFrame:
         if self.limit_val is not None:
             heading_vals.append('Limit')
             info_vals.append(self.limit_val.display_str(inline=False))
+        if self.sample_clause is not None:
+            heading_vals.append('Sample')
+            info_vals.append(self.sample_clause.display_str(inline=False))
         assert len(heading_vals) == len(info_vals)
         return pd.DataFrame(info_vals, index=heading_vals)
 
@@ -626,6 +664,8 @@ class DataFrame:
         """
         if self.where_clause is not None:
             raise excs.Error('Where clause already specified')
+        if self.sample_clause is not None:
+            raise excs.Error('where cannot be used after sample()')
         if not isinstance(pred, exprs.Expr):
             raise excs.Error(f'Where() requires a Pixeltable expression, but instead got {type(pred)}')
         if not pred.col_type.is_bool_type():
@@ -753,6 +793,8 @@ class DataFrame:
 
             >>> df = t.join(d, on=(t.d1 == d.pk1) & (t.d2 == d.pk2), how='left')
         """
+        if self.sample_clause is not None:
+            raise excs.Error('join() cannot be used with sample()')
         join_pred: Optional[exprs.Expr]
         if how == 'cross':
             if on is not None:
@@ -820,6 +862,9 @@ class DataFrame:
         """
         if self.group_by_clause is not None:
             raise excs.Error('Group-by already specified')
+        if self.sample_clause is not None:
+            raise excs.Error('group_by() cannot be used with sample()')
+
         grouping_tbl: Optional[catalog.TableVersion] = None
         group_by_clause: Optional[list[exprs.Expr]] = None
         for item in grouping_items:
@@ -878,6 +923,8 @@ class DataFrame:
 
             >>> df = book.order_by(t.price, asc=False).order_by(t.pages)
         """
+        if self.sample_clause is not None:
+            raise excs.Error('group_by() cannot be used with sample()')
         for e in expr_list:
             if not isinstance(e, exprs.Expr):
                 raise excs.Error(f'Invalid expression in order_by(): {e}')
@@ -902,10 +949,10 @@ class DataFrame:
         Returns:
             A new DataFrame with the specified limited rows.
         """
-        assert n is not None
-        n = exprs.Expr.from_object(n)
-        if not n.col_type.is_int_type():
-            raise excs.Error(f'limit(): parameter must be of type int, instead of {n.col_type}')
+        if self.sample_clause is not None:
+            raise excs.Error('limit() cannot be used with sample()')
+
+        limit_expr = self._convert_int_param(n, True, 'limit()')
         return DataFrame(
             from_clause=self._from_clause,
             select_list=self.select_list,
@@ -913,7 +960,109 @@ class DataFrame:
             group_by_clause=self.group_by_clause,
             grouping_tbl=self.grouping_tbl,
             order_by_clause=self.order_by_clause,
-            limit=n,
+            limit=limit_expr,
+        )
+
+    @classmethod
+    def fraction_to_md5_hex(cls, fraction: float) -> str:
+        # Maximum count for the upper 32 bits of MD5: 2^32
+        max_md5_value = (2**32) - 1
+
+        # Calculate 10% of this value
+        threshold_int = max_md5_value * int(1_000_000_000 * fraction) // 1_000_000_000
+
+        # Convert to hexadecimal string with proper padding
+        return format(threshold_int, '08x') + 'FFFFFFFFFFFFFFFFFFFFFFFF'
+
+    @classmethod
+    def build_magic_key_expr(cls, source: TableVersionHandle) -> exprs.Expr:
+        num_rowid_cols = len(source.get().store_tbl.rowid_columns())
+        z = exprs.RowidRef(source, 0).astype(ts.String) + '___'
+        for idx in range(1, num_rowid_cols):
+            z = z + exprs.RowidRef(source, idx).astype(ts.String) + '___'
+        return z
+
+    def sample(
+        self,
+        n: Optional[int] = None,
+        fraction: Optional[float] = None,
+        seed: Optional[int] = None,
+        stratify_by: Optional[list[Any]] = None,
+    ) -> DataFrame:
+        """Choose a shuffled sample of rows in the DataFrame
+
+        Args:
+            n: Number of rows to produce as a sample.
+            fraction: Fraction of available rows to produce as a sample.
+            seed: Random seed for reproducible shuffling
+
+        Returns:
+            A new DataFrame with the sampled rows
+        """
+
+        if self.sample_clause is not None:
+            raise excs.Error('sample() cannot be used with sample')
+        if self.group_by_clause is not None:
+            raise excs.Error('sample() cannot be used with group_by')
+        if self.order_by_clause is not None:
+            raise excs.Error('sample() cannot be used with order_by')
+        if self.limit_val is not None:
+            raise excs.Error('sample() cannot be used with limit')
+        if self._has_joins():
+            raise excs.Error('sample() cannot be used with join')
+
+        if (n is None) and (fraction is None):
+            raise excs.Error('At least one of `n` or `fraction` must be supplied.')
+
+        n_expr = self._convert_int_param(n, False, 'n')
+        fraction_expr = self._convert_float_param(fraction, False, 'fraction')
+        seed_expr = self._convert_int_param(seed, False, 'seed')
+
+        if fraction_expr is not None:
+            f_v = fraction_expr.val
+            if (f_v < 0.0) or (f_v > 1.0):
+                raise excs.Error('fraction parameter must be between 0.0 and 1.0')
+
+        # analyze stratify list
+        stratify_list: list[exprs.Expr] = []
+        if stratify_by is not None:
+            if isinstance(stratify_by, exprs.Expr):
+                stratify_by = [stratify_by]
+            if not isinstance(stratify_by, list):
+                raise excs.Error('`stratify_by` parameter must be composed of expressions')
+            for raw_expr in stratify_by:
+                expr = exprs.Expr.from_object(raw_expr)
+                if raw_expr is None or expr is None or not isinstance(raw_expr, exprs.ColumnRef):
+                    raise excs.Error(f'Invalid expression: {raw_expr}')
+                if not (expr.col_type.is_int_type() or expr.col_type.is_string_type() or expr.col_type.is_bool_type()):
+                    raise excs.Error(f'Invalid type: {raw_expr}')
+                if not expr.is_bound_by(self._from_clause.tbls):
+                    raise excs.Error(
+                        f"Expression '{expr}' cannot be evaluated in the context of this query's tables "
+                        f'({",".join(tbl.tbl_name() for tbl in self._from_clause.tbls)})'
+                    )
+                stratify_list.append(expr)
+        samplex = SampleX(n_expr, fraction_expr, seed_expr, stratify_list)
+
+        # ----------- Implementation
+        where: Optional[exprs.Expr] = self.where_clause
+        seed_v = int(samplex._seed_expr.val) if samplex._seed_expr.val is not None else 0
+        mk = self.build_magic_key_expr(self._first_tbl.tbl_version).hashed('md5', seed_v)
+        if samplex._fraction_expr.val is not None:
+            fraction_md5_hex = exprs.Expr.from_object(HashOp.fraction_to_md5_hex(float(samplex._fraction_expr.val)))
+            where = mk < fraction_md5_hex
+        order_by: list[tuple[exprs.Expr, bool]] = [(mk, True)]
+        limit = samplex._n_expr
+
+        return DataFrame(
+            from_clause=self._from_clause,
+            select_list=self.select_list,
+            where_clause=where,
+            group_by_clause=self.group_by_clause,
+            grouping_tbl=self.grouping_tbl,
+            order_by_clause=order_by,
+            limit=limit,
+            sample_clause=samplex,
         )
 
     def update(self, value_spec: dict[str, Any], cascade: bool = True) -> UpdateStatus:
