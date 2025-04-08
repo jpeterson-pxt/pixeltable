@@ -29,11 +29,14 @@ class TypeCast(Expr):
     def _op1(self) -> Expr:
         return self.components[0]
 
-    def sql_expr(self, _: SqlElementCache) -> Optional[sql.ColumnElement]:
+    def sql_expr(self, sql_elements: SqlElementCache) -> Optional[sql.ColumnElement]:
         """
-        sql_expr() is unimplemented for now, in order to sidestep potentially thorny
+        most of sql_expr() is unimplemented for now, in order to sidestep potentially thorny
         questions about consistency of doing type conversions in both Python and Postgres.
         """
+        if self._op1.col_type.is_int_type() and self.col_type.is_string_type():
+            v = sql_elements.get(self._op1)
+            return sql.cast(v, self.col_type.to_sa_type())
         return None
 
     def eval(self, data_row: DataRow, row_builder: RowBuilder) -> None:

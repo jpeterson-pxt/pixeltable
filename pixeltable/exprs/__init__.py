@@ -12,6 +12,7 @@ from .expr_dict import ExprDict
 from .expr_set import ExprSet
 from .function_call import FunctionCall
 from .globals import ArithmeticOperator, ComparisonOperator, LogicalOperator
+from .hash_op import HashOp
 from .in_predicate import InPredicate
 from .inline_expr import InlineArray, InlineDict, InlineList
 from .is_null import IsNull

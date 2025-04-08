@@ -1129,6 +1129,29 @@ class TestExprs:
         assert sim1.id != sim2.id
         assert sim1.serialize() != sim2.serialize()
 
+    def test_hashed(self, test_tbl: catalog.Table, reload_tester: ReloadTester) -> None:
+        t = test_tbl
+
+        # Test errors
+        with pytest.raises(pxt.Error, match='only `md5` hash algorithm currently supported'):
+            _ = t.select(t.c1.hashed('foo'))
+        with pytest.raises(pxt.Error, match='must be of type int'):
+            _ = t.select(t.c1.hashed(seed='hi there'))  # type: ignore[arg-type]
+
+        # Test some values
+        res = reload_tester.run_query(t.select(t.c1.hashed(seed=47)).limit(5))
+        print(res)
+        assert res['col_0'][0] == '7f19a34de0bc5334baa72fc384e0e21b'
+        assert res['col_0'][1] == 'a48448ec98dc0a19f8a0d840a98e7eb9'
+
+        t.add_computed_column(ch=t.c1.hashed(seed=47))
+        res = reload_tester.run_query(t.select(t.c1, t.ch).limit(5))
+        print(res)
+        assert res['ch'][0] == '7f19a34de0bc5334baa72fc384e0e21b'
+        assert res['ch'][1] == 'a48448ec98dc0a19f8a0d840a98e7eb9'
+
+        reload_tester.run_reload_test()
+
     def test_ids(
         self, test_tbl_exprs: list[exprs.Expr], img_tbl_exprs: list[exprs.Expr], multi_img_tbl_exprs: list[exprs.Expr]
     ) -> None:

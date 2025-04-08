@@ -543,6 +543,24 @@ class Expr(abc.ABC):
         else:
             return InPredicate(self, value_set_literal=value_set)
 
+    def hashed(self, alg: Optional[str] = 'md5', seed: Optional[int] = 0) -> exprs.HashOp:
+        from pixeltable import DataFrame
+        from pixeltable.exprs import HashOp
+
+        if alg != 'md5':
+            raise excs.Error('only `md5` hash algorithm currently supported')
+        alg_expr = self.from_object(alg)
+        seed_expr = DataFrame._convert_int_param(seed, False, 'seed')
+
+        if (
+            isinstance(self, str)
+            or (isinstance(self, Expr) and self.col_type.is_string_type())
+            or isinstance(self, int)
+            or (isinstance(self, Expr) and self.col_type.is_int_type())
+        ):
+            return HashOp(self, alg_expr, seed_expr)
+        raise excs.Error('`hashed` function only applicable to str and int types')
+
     def astype(self, new_type: Union[ts.ColumnType, type, _AnnotatedAlias]) -> 'exprs.TypeCast':
         from pixeltable.exprs import TypeCast
 
