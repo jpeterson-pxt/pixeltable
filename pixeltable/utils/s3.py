@@ -1,3 +1,4 @@
+import io
 import threading
 import urllib.parse
 import urllib.request
@@ -91,14 +92,22 @@ class S3ClientContainer:
         else:
             return self.client_read.get_client()
 
-    def list_objects(self, source_uri: str, n_max: int = 10) -> list[str]:
-        """Return a list of objects found within the specified S3 bucket/path"""
-        # I think the n_max parameter should be passed into the list_objects_v2 call
+    @classmethod
+    def parse_uri(cls, source_uri: str) -> tuple[str, str, str]:
+        """Parse a URI and return parts
+        Returns: scheme, bucket_name, prefix"""
         parsed = urllib.parse.urlparse(source_uri)
-        assert parsed.scheme == 's3'
         bucket_name = parsed.netloc
         prefix = parsed.path.lstrip('/')
-        s3_client = self.get_client_raw()
+        return parsed.scheme, bucket_name, prefix
+
+    def list_objects(self, source_uri: str, n_max: int = 10) -> list[str]:
+        """Return a list of objects found with the specified S3 bucket/prefix
+        Each returned object includes the full set of prefixes."""
+        scheme, bucket_name, prefix = self.parse_uri(source_uri)
+        # I think the n_max parameter should be passed into the list_objects_v2 call
+        assert scheme == 's3'
+        s3_client = self.get_client(for_write=False)
         r: list[str] = []
         try:
             # Use paginator to handle more than 1000 objects
@@ -111,14 +120,16 @@ class S3ClientContainer:
                         return r
                     r.append(f'{obj["Key"]}')
         except ClientError as e:
-            self.handle_s3_error(e, bucket_name, f'list objects for deletion from {source_uri}')
-
+            self.handle_s3_error(e, bucket_name, f'list objects from {source_uri}')
         return r
 
     def list_uris(self, source_uri: str, n_max: int = 10) -> list[str]:
         """Return a list of URIs found within the specified S3 bucket/path"""
+        scheme, bucket_name, _ = self.parse_uri(source_uri)
+        assert scheme == 's3'
         objects = self.list_objects(source_uri, n_max)
-        return [f'{source_uri}/{obj}' for obj in objects]
+        r = [f'{scheme}://{bucket_name}/{obj}' for obj in objects]
+        return r
 
     def fetch_url(self, url: str) -> tuple[Optional[str], Optional[Exception]]:
         """Fetches a remote URL into Env.tmp_dir and returns its path"""
@@ -162,6 +173,19 @@ class S3ClientContainer:
         upload_args = {'ChecksumAlgorithm': 'SHA256'}
         s3_client.upload_file(Filename=str(local_path), Bucket=bucket, Key=remote_path, ExtraArgs=upload_args)
 
+    def write_to_remote(self, data: io.BytesIO, remote_uri: str, object_name: str) -> str:
+        """Send data to remote storage (e.g., S3), and return the URI of the data"""
+        scheme, bucket_name, prefix = self.parse_uri(remote_uri)  # Ensure the URI is valid
+        if scheme != 's3':
+            raise excs.Error(f'Unsupported destination: {remote_uri}')
+
+        remote_dir = Path(urllib.parse.unquote(urllib.request.url2pathname(prefix)))
+        remote_path = str(remote_dir / object_name)  # Remove initial / if it exists
+
+        s3_client = self.get_client(for_write=True)
+        s3_client.upload_fileobj(data, Bucket=bucket_name, Key=remote_path)
+        return f'{scheme}://{bucket_name}/{remote_path}'
+
     def delete_all_objects_with_prefix(self, bucket_name: str, prefix: str) -> None:
         """
         Delete all objects in the bucket with the given prefix (in batches)
@@ -193,3 +217,50 @@ class S3ClientContainer:
             raise excs.Error(f'Precondition failed for bucket {bucket_name} during {operation}: {error_message}')
         else:
             raise excs.Error(f'Error during {operation} in bucket {bucket_name}: {error_code} - {error_message}')
+
+
+class RemoteStorage:
+    """A utility class for remote storage operations, such as S3"""
+
+    @classmethod
+    def list_objects(cls, source_uri: str, n_max: int = 10) -> list[str]:
+        """List objects in a remote storage location"""
+        s3_client = S3ClientContainer()
+        return s3_client.list_objects(source_uri, n_max)
+
+    @classmethod
+    def list_uris(cls, source_uri: str, n_max: int = 10) -> list[str]:
+        """List URIs in a remote storage location"""
+        s3_client = S3ClientContainer()
+        return s3_client.list_uris(source_uri, n_max)
+
+    @classmethod
+    def write_to_remote(cls, data: Any, remote_uri: str, object_name: str) -> str:
+        """Write data to a remote storage location and return the URI of the data"""
+        s3_client = S3ClientContainer()
+        return s3_client.write_to_remote(data, remote_uri, object_name)
+
+    @classmethod
+    def copy_local_file_to_remote(cls, file_path: str, remote_uri: str, object_name: str) -> str:
+        """Copy a local file to a remote storage location and return its URI"""
+        local_path = Path(file_path)
+        if not local_path.exists():
+            raise excs.Error(f'Local file {file_path} does not exist')
+        if not local_path.is_file():
+            raise excs.Error(f'Local path {file_path} is not a file')
+        if not local_path.is_absolute():
+            raise excs.Error(f'Local path {file_path} must be absolute')
+        remote_uri = f'{remote_uri}/{object_name}'
+        if not remote_uri.startswith('s3://'):
+            raise excs.Error(f'Unsupported remote URI: {remote_uri}')
+        # Ensure the remote URI is valid
+        with open(local_path, 'rb') as f:
+            remote_uri = cls.write_to_remote(f, remote_uri, object_name)
+        if remote_uri is None:
+            raise excs.Error(f'Failed to write {local_path} to {remote_uri}')
+        return remote_uri
+
+    @classmethod
+    def fetch_url(cls, url: str) -> tuple[Optional[str], Optional[Exception]]:
+        """Fetch a remote URL into a temporary file and return its path"""
+        return None, None
