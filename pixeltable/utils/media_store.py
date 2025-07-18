@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import glob
 import os
 import re
@@ -7,12 +9,15 @@ import urllib.request
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
 import PIL.Image
 
 from pixeltable import env
+
+if TYPE_CHECKING:
+    from pixeltable.catalog import Column
 
 
 class MediaStore:
@@ -37,16 +42,16 @@ class MediaStore:
         return env.Env.get().tmp_dir
 
     @classmethod
-    def _prepare_media_path(cls, tbl_id: UUID, col_id: int, tbl_version: int, ext: Optional[str] = None) -> Path:
+    def _prepare_media_path(cls, col: Column, ext: Optional[str] = None) -> Path:
         """
         Construct a new, unique Path name for a persisted media file, and create the parent directory
         for the new Path if it does not already exist. The Path will reside in
         the environment's media_dir.
         """
         id_hex = uuid.uuid4().hex
-        parent = cls._media_dir() / tbl_id.hex / id_hex[:2] / id_hex[:4]
+        parent = cls._media_dir() / col.tbl.id.hex / id_hex[:2] / id_hex[:4]
         parent.mkdir(parents=True, exist_ok=True)
-        return parent / f'{tbl_id.hex}_{col_id}_{tbl_version}_{id_hex}{ext or ""}'
+        return parent / f'{col.tbl.id.hex}_{col.id}_{col.tbl.version}_{id_hex}{ext or ""}'
 
     @classmethod
     def is_tmp_url(cls, file_url: Optional[str]) -> tuple[bool, Path]:
@@ -73,38 +78,16 @@ class MediaStore:
         return src_path.startswith(pxt_tmp_dir), Path(src_path)
 
     @classmethod
-    def move_tmp_media_file(cls, file_url: Optional[str], tbl_id: UUID, col_id: int, tbl_version: int) -> Optional[str]:
-        """If the given url is a tmp file, move it into the MediaStore, and return new url
-        If it is not a tmp file in the tmp_dir, return the original url.
-
-        Args:
-            file_url: URL of the tmp media file to move
-            tbl_id: Table ID to associate with the media file
-            col_id: Column ID to associate with the media file
-            tbl_version: tbl_version number to associate with the media file
-
-        Returns:
-            URL of the media final location of the file
-        """
-        is_tmp, src_path = cls.is_tmp_url(file_url)
-        if not is_tmp:
-            return file_url
-        new_file_url = cls.relocate_local_media_file(src_path, tbl_id, col_id, tbl_version)
-        return new_file_url
-
-    @classmethod
-    def relocate_local_media_file(cls, src_path: Path, tbl_id: UUID, col_id: int, tbl_version: int) -> str:
+    def relocate_local_media_file(cls, src_path: Path, col: Column) -> str:
         """Relocate a local file to the MediaStore, and return its new URL"""
-        dest_path = cls._prepare_media_path(tbl_id, col_id, tbl_version, ext=src_path.suffix)
+        dest_path = cls._prepare_media_path(col, ext=src_path.suffix)
         src_path.rename(dest_path)
         return urllib.parse.urljoin('file:', urllib.request.pathname2url(str(dest_path)))
 
     @classmethod
-    def save_media_object(
-        cls, data: bytes | PIL.Image.Image, tbl_id: UUID, col_id: int, tbl_version: int
-    ) -> tuple[Path, str]:
+    def save_media_object(cls, data: bytes | PIL.Image.Image, col: Column) -> tuple[Path, str]:
         """Save a media binary data to a file in the MediaStore"""
-        dest_path = cls._prepare_media_path(tbl_id, col_id, tbl_version)
+        dest_path = cls._prepare_media_path(col)
         if isinstance(data, bytes):
             dest_path = cls._save_media_file(data, dest_path)
         elif isinstance(data, PIL.Image.Image):
