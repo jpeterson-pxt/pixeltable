@@ -28,6 +28,7 @@ class ObjectStoreSaveNode(ExecNode):
 
     TODO:
     - adapting the number of download threads at runtime to maximize throughput
+    - Limit the number of in-flight requests to control memory usage
     """
 
     QUEUE_DEPTH_HIGH_WATER = 20  # target number of in-flight requests
@@ -76,28 +77,44 @@ class ObjectStoreSaveNode(ExecNode):
         self.in_flight_urls = {}
         self.input_finished = False
         self.row_idx = itertools.count() if retain_input_order else itertools.repeat(None)
+        assert self.QUEUE_DEPTH_HIGH_WATER > self.QUEUE_DEPTH_LOW_WATER
 
     @property
     def queued_work(self) -> int:
         return len(self.in_flight_requests)
 
+    async def get_input_batch(self, input_iter: AsyncIterator[DataRowBatch]) -> Optional[DataRowBatch]:
+        """Get the next batch of input rows, or None if there are no more rows"""
+        try:
+            input_batch = await anext(input_iter)
+            if input_batch is None:
+                self.input_finished = True
+            return input_batch
+        except StopAsyncIteration:
+            self.input_finished = True
+            return None
+
     async def __aiter__(self) -> AsyncIterator[DataRowBatch]:
         input_iter = self.input.__aiter__()
         with futures.ThreadPoolExecutor(max_workers=self.NUM_EXECUTOR_THREADS) as executor:
             while True:
-                # we create enough in-flight requests to fill the first batch
+                # Create work to fill the queue to the high water mark ... ?without overrunning the in-flight row limit.
                 while not self.input_finished and self.queued_work < self.QUEUE_DEPTH_HIGH_WATER:
-                    await self.__submit_input_batch(input_iter, executor)
+                    input_batch = await self.get_input_batch(input_iter)
+                    if input_batch is not None:
+                        self.__process_input_batch(input_batch, executor)
 
                 print(f'\n===============>>> done={self.input_finished}, queued_work={self.queued_work}\n')
 
-                # try to assemble a full batch of output rows
+                # Wait for enough completions to enable more queueing or if we're done
                 while self.queued_work > self.QUEUE_DEPTH_LOW_WATER or (self.input_finished and self.queued_work > 0):
-                    _logger.debug(f'waiting for requests; ready_batch_size={self.__ready_prefix_len()}')
                     done, _ = futures.wait(self.in_flight_requests, return_when=futures.FIRST_COMPLETED)
-                    self.__process_completions(done)
+                    self.__process_completions(done, ignore_errors=self.ctx.ignore_errors)
 
-                if len(self.ready_rows) > 0:
+                # Emit results to meet batch size requirements or empty the in-flight row queue
+                if self.__has_ready_batch() or (
+                    len(self.ready_rows) > 0 and self.input_finished and self.queued_work == 0
+                ):
                     # create DataRowBatch from the first BATCH_SIZE ready rows
                     batch = DataRowBatch(self.row_builder)
                     rows = [self.ready_rows.popleft() for _ in range(min(self.BATCH_SIZE, len(self.ready_rows)))]
@@ -117,10 +134,6 @@ class ObjectStoreSaveNode(ExecNode):
             sum(int(row is not None) for row in itertools.islice(self.ready_rows, self.BATCH_SIZE)) == self.BATCH_SIZE
         )
 
-    def __ready_prefix_len(self) -> int:
-        """Length of the non-None prefix of ready_rows (= what we can return right now)"""
-        return sum(1 for _ in itertools.takewhile(lambda x: x is not None, self.ready_rows))
-
     def __add_ready_row(self, row: exprs.DataRow, row_idx: Optional[int]) -> None:
         if row_idx is None:
             self.ready_rows.append(row)
@@ -131,26 +144,12 @@ class ObjectStoreSaveNode(ExecNode):
                 self.ready_rows.extend([None] * (idx - len(self.ready_rows) + 1))
             self.ready_rows[idx] = row
 
-    async def __submit_input_batch(
-        self, input: AsyncIterator[DataRowBatch], executor: futures.ThreadPoolExecutor
-    ) -> None:
-        assert not self.input_finished
-        input_batch: Optional[DataRowBatch]
-        try:
-            input_batch = await anext(input)
-        except StopAsyncIteration:
-            input_batch = None
-        if input_batch is None:
-            self.input_finished = True
-            return
-        self.__process_input_batch(input_batch, executor)
-
-    def __process_completions(self, done: set[futures.Future]) -> None:
+    def __process_completions(self, done: set[futures.Future], ignore_errors: bool) -> None:
         file_cache = FileCache.get()
         for f in done:
             url = self.in_flight_requests.pop(f)
             tmp_path, exc = f.result()
-            if exc is not None and not self.ctx.ignore_errors:
+            if exc is not None and not ignore_errors:
                 raise exc
             local_path: Optional[Path] = None
             if tmp_path is not None:
@@ -172,7 +171,6 @@ class ObjectStoreSaveNode(ExecNode):
                 if state.num_missing == 0:
                     del self.in_flight_rows[id(row)]
                     self.__add_ready_row(row, state.idx)
-                    _logger.debug(f'row {state.idx} is ready (ready_batch_size={self.__ready_prefix_len()})')
 
     def __process_input_batch(self, input_batch: DataRowBatch, executor: futures.ThreadPoolExecutor) -> None:
         """Process a batch of input rows, submitting URLs for download and adding ready rows to ready_rows"""
