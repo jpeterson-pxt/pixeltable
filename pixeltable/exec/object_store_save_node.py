@@ -30,6 +30,8 @@ class ObjectStoreSaveNode(ExecNode):
     - adapting the number of download threads at runtime to maximize throughput
     """
 
+    QUEUE_DEPTH_HIGH_WATER = 20  # target number of in-flight requests
+    QUEUE_DEPTH_LOW_WATER = 10  # target number of in-flight requests
     BATCH_SIZE = 16
     NUM_EXECUTOR_THREADS = 16
 
@@ -75,21 +77,25 @@ class ObjectStoreSaveNode(ExecNode):
         self.input_finished = False
         self.row_idx = itertools.count() if retain_input_order else itertools.repeat(None)
 
+    @property
+    def queued_work(self) -> int:
+        return len(self.in_flight_requests)
+
     async def __aiter__(self) -> AsyncIterator[DataRowBatch]:
         input_iter = self.input.__aiter__()
         with futures.ThreadPoolExecutor(max_workers=self.NUM_EXECUTOR_THREADS) as executor:
-            # we create enough in-flight requests to fill the first batch
-            while not self.input_finished and self.__num_pending_rows() < self.BATCH_SIZE:
-                await self.__submit_input_batch(input_iter, executor)
-
             while True:
-                # try to assemble a full batch of output rows
-                if not self.__has_ready_batch() and len(self.in_flight_requests) > 0:
-                    self.__wait_for_requests()
-
-                # try to create enough in-flight requests to fill the next batch
-                while not self.input_finished and self.__num_pending_rows() < self.BATCH_SIZE:
+                # we create enough in-flight requests to fill the first batch
+                while not self.input_finished and self.queued_work < self.QUEUE_DEPTH_HIGH_WATER:
                     await self.__submit_input_batch(input_iter, executor)
+
+                print(f'\n===============>>> done={self.input_finished}, queued_work={self.queued_work}\n')
+
+                # try to assemble a full batch of output rows
+                while self.queued_work > self.QUEUE_DEPTH_LOW_WATER or (self.input_finished and self.queued_work > 0):
+                    _logger.debug(f'waiting for requests; ready_batch_size={self.__ready_prefix_len()}')
+                    done, _ = futures.wait(self.in_flight_requests, return_when=futures.FIRST_COMPLETED)
+                    self.__process_completions(done)
 
                 if len(self.ready_rows) > 0:
                     # create DataRowBatch from the first BATCH_SIZE ready rows
@@ -102,11 +108,8 @@ class ObjectStoreSaveNode(ExecNode):
                     _logger.debug(f'returning {len(rows)} rows')
                     yield batch
 
-                if self.input_finished and self.__num_pending_rows() == 0:
+                if self.input_finished and self.queued_work == 0:
                     return
-
-    def __num_pending_rows(self) -> int:
-        return len(self.in_flight_rows) + len(self.ready_rows)
 
     def __has_ready_batch(self) -> bool:
         """True if there are >= BATCH_SIZES entries in ready_rows and the first BATCH_SIZE ones are all non-None"""
@@ -128,39 +131,6 @@ class ObjectStoreSaveNode(ExecNode):
                 self.ready_rows.extend([None] * (idx - len(self.ready_rows) + 1))
             self.ready_rows[idx] = row
 
-    def __wait_for_requests(self) -> None:
-        """Wait for in-flight requests to complete until we have a full batch of rows"""
-        file_cache = FileCache.get()
-        _logger.debug(f'waiting for requests; ready_batch_size={self.__ready_prefix_len()}')
-        while not self.__has_ready_batch() and len(self.in_flight_requests) > 0:
-            done, _ = futures.wait(self.in_flight_requests, return_when=futures.FIRST_COMPLETED)
-            for f in done:
-                url = self.in_flight_requests.pop(f)
-                tmp_path, exc = f.result()
-                if exc is not None and not self.ctx.ignore_errors:
-                    raise exc
-                local_path: Optional[Path] = None
-                if tmp_path is not None:
-                    # register the file with the cache for the first column in which it's missing
-                    assert url in self.in_flight_urls
-                    _, info = self.in_flight_urls[url][0]
-                    local_path = file_cache.add(info.col.tbl.id, info.col.id, url, tmp_path)
-                    _logger.debug(f'cached {url} as {local_path}')
-
-                # add the local path/exception to the slots that reference the url
-                for row, info in self.in_flight_urls.pop(url):
-                    if exc is not None:
-                        self.row_builder.set_exc(row, info.slot_idx, exc)
-                    else:
-                        assert local_path is not None
-                        row.set_file_path(info.slot_idx, str(local_path))
-                    state = self.in_flight_rows[id(row)]
-                    state.num_missing -= 1
-                    if state.num_missing == 0:
-                        del self.in_flight_rows[id(row)]
-                        self.__add_ready_row(row, state.idx)
-                        _logger.debug(f'row {state.idx} is ready (ready_batch_size={self.__ready_prefix_len()})')
-
     async def __submit_input_batch(
         self, input: AsyncIterator[DataRowBatch], executor: futures.ThreadPoolExecutor
     ) -> None:
@@ -173,7 +143,39 @@ class ObjectStoreSaveNode(ExecNode):
         if input_batch is None:
             self.input_finished = True
             return
+        self.__process_input_batch(input_batch, executor)
 
+    def __process_completions(self, done: set[futures.Future]) -> None:
+        file_cache = FileCache.get()
+        for f in done:
+            url = self.in_flight_requests.pop(f)
+            tmp_path, exc = f.result()
+            if exc is not None and not self.ctx.ignore_errors:
+                raise exc
+            local_path: Optional[Path] = None
+            if tmp_path is not None:
+                # register the file with the cache for the first column in which it's missing
+                assert url in self.in_flight_urls
+                _, info = self.in_flight_urls[url][0]
+                local_path = file_cache.add(info.col.tbl.id, info.col.id, url, tmp_path)
+                _logger.debug(f'cached {url} as {local_path}')
+
+            # add the local path/exception to the slots that reference the url
+            for row, info in self.in_flight_urls.pop(url):
+                if exc is not None:
+                    self.row_builder.set_exc(row, info.slot_idx, exc)
+                else:
+                    assert local_path is not None
+                    row.set_file_path(info.slot_idx, str(local_path))
+                state = self.in_flight_rows[id(row)]
+                state.num_missing -= 1
+                if state.num_missing == 0:
+                    del self.in_flight_rows[id(row)]
+                    self.__add_ready_row(row, state.idx)
+                    _logger.debug(f'row {state.idx} is ready (ready_batch_size={self.__ready_prefix_len()})')
+
+    def __process_input_batch(self, input_batch: DataRowBatch, executor: futures.ThreadPoolExecutor) -> None:
+        """Process a batch of input rows, submitting URLs for download and adding ready rows to ready_rows"""
         file_cache = FileCache.get()
 
         # URLs from this input batch that aren't already in the file cache;
