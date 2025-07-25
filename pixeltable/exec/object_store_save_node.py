@@ -108,7 +108,7 @@ class ObjectStoreSaveNode(ExecNode):
                     _logger.debug(f'returning {len(rows)} rows')
                     yield batch
 
-                if self.input_finished and self.queued_work == 0:
+                if self.input_finished and self.queued_work == 0 and len(self.ready_rows) == 0:
                     return
 
     def __has_ready_batch(self) -> bool:
