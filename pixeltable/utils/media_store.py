@@ -192,6 +192,8 @@ class MediaStore:
     @classmethod
     def relocate_local_media_file(cls, src_path: Path, col: Column) -> str:
         """Relocate a local file to the MediaStore, and return its new URL"""
+        print(f'\n=========>> Relocating media file {src_path} to MediaStore for column {col.name}\n')
+#        assert False
         return MediaStoreFile(cls._media_dir()).relocate_local_media_file(src_path, col)
 
     @classmethod

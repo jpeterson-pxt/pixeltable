@@ -472,7 +472,7 @@ class RowBuilder:
                     if col.col_type.is_image_type() and data_row.file_urls[slot_idx] is None:
                         # we have yet to store this image
                         data_row.flush_img(slot_idx, col)
-                    data_row.move_tmp_media_file(slot_idx, col)
+#                    data_row.move_tmp_media_file(slot_idx, col)
                 val = data_row.get_stored_val(slot_idx, col.get_sa_col_type())
                 table_row.append(val)
                 if col.stores_cellmd:
@@ -505,3 +505,9 @@ class RowBuilder:
         stored_col_info = self.output_slot_idxs()
         stored_img_col_info = [info for info in stored_col_info if info.col.col_type.is_image_type()]
         return stored_img_col_info
+
+    def stored_media_cols(self) -> list[exprs.ColumnSlotIdx]:
+        """Returns the list of stored media columns"""
+        stored_col_info = self.output_slot_idxs()
+        stored_media_col_info = [info for info in stored_col_info if info.col.col_type.is_media_type() and info.col.is_stored]
+        return stored_media_col_info

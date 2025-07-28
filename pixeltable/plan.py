@@ -394,7 +394,6 @@ class Planner:
                 row_builder, computed_exprs, plan.output_exprs, input=plan, maintain_input_order=False
             )
 
-        plan.set_stored_img_cols(row_builder.stored_img_cols())
         plan.set_ctx(
             exec.ExecContext(
                 row_builder,
@@ -404,6 +403,9 @@ class Planner:
                 ignore_errors=ignore_errors,
             )
         )
+        plan = cls._insert_save_node(tbl.id, row_builder.stored_media_cols(), input_node=plan)
+
+        plan.set_stored_img_cols(row_builder.stored_img_cols())
         return plan
 
     @classmethod
@@ -767,6 +769,17 @@ class Planner:
         return combined_ordering
 
     @classmethod
+    def _insert_save_node(
+        cls, tbl_id: UUID, media_cols: list[exprs.ColumnSlotIdx], input_node: exec.ExecNode
+    ) -> exec.ExecNode:
+        """Return an ObjectStoreSaveNode if media columns are present, otherwise return input"""
+        if len(media_cols) == 0:
+            return input_node
+        save_node = exec.ObjectStoreSaveNode(tbl_id, media_cols, input_node)
+        save_node.set_ctx(input_node.ctx)
+        return save_node
+
+    @classmethod
     def _is_contained_in(cls, l1: Iterable[exprs.Expr], l2: Iterable[exprs.Expr]) -> bool:
         """Returns True if l1 is contained in l2"""
         return {e.id for e in l1} <= {e.id for e in l2}
@@ -784,7 +797,7 @@ class Planner:
             return input_node
         # we need to prefetch external files for media column types
         file_col_info = [exprs.ColumnSlotIdx(e.col, e.slot_idx) for e in media_col_refs]
-        prefetch_node = exec.ObjectStoreSaveNode(tbl_id, file_col_info, input_node)
+        prefetch_node = exec.ObjectStorePrefNode(tbl_id, file_col_info, input_node)
         return prefetch_node
 
     @classmethod
@@ -1038,6 +1051,7 @@ class Planner:
         plan = cls._create_query_plan(
             row_builder=row_builder, analyzer=analyzer, eval_ctx=row_builder.default_eval_ctx, with_pk=True
         )
+
         plan.ctx.batch_size = 16
         plan.ctx.show_pbar = True
         plan.ctx.ignore_errors = True
@@ -1045,6 +1059,17 @@ class Planner:
         plan.ctx.num_computed_exprs = len(computed_exprs)  # we are adding a computed column, so we need to evaluate it
 
         # we want to flush images
+        stored_img_cols = []
+        stored_media_cols = []
         if col.is_computed and col.is_stored and col.col_type.is_image_type():
-            plan.set_stored_img_cols(row_builder.output_slot_idxs())
+            stored_img_cols = row_builder.output_slot_idxs()
+        if col.is_computed and col.is_stored and col.col_type.is_media_type():
+            stored_media_cols = row_builder.output_slot_idxs()  
+
+        # we need to add the column to the row builder
+        plan = cls._insert_save_node(tbl.tbl_version.id, stored_media_cols, input_node=plan)
+
+        # we want to flush images
+        if len(stored_img_cols) > 0:
+            plan.set_stored_img_cols(stored_img_cols)
         return plan

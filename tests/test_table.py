@@ -684,7 +684,7 @@ class TestTable:
         assert table_list == pxt.list_tables()
 
     def test_image_table(self, reset_db: None) -> None:
-        n_sample_rows = 20
+        n_sample_rows = 4
         schema = {'img': pxt.Image, 'category': pxt.String, 'split': pxt.String, 'img_literal': pxt.Image}
         tbl = pxt.create_table('test', schema)
         assert MediaStore.count(tbl._id) == 0

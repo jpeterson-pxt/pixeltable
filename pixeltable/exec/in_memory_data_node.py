@@ -68,6 +68,7 @@ class InMemoryDataNode(ExecNode):
                 if col.col_type.is_image_type() and isinstance(val, bytes):
                     # this is a literal media file, ie, a sequence of bytes; save it as a binary file and store the path
                     filepath, _ = TempStore.save_media_object(val, col, format=None)
+                    print(f'\n=========>> Saved media file to {filepath}\n')
                     output_row[col_info.slot_idx] = str(filepath)
                 else:
                     output_row[col_info.slot_idx] = val
