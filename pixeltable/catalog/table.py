@@ -4,6 +4,8 @@ import abc
 import builtins
 import json
 import logging
+import os
+import urllib.parse
 from keyword import iskeyword as is_python_keyword
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Literal, Optional, Union, overload
@@ -575,6 +577,7 @@ class Table(SchemaObject):
         self,
         *,
         stored: Optional[bool] = None,
+        destination: Optional[Union[str, Path]] = None,
         print_stats: bool = False,
         on_error: Literal['abort', 'ignore'] = 'abort',
         if_exists: Literal['error', 'ignore', 'replace'] = 'error',
@@ -636,6 +639,9 @@ class Table(SchemaObject):
             if stored is not None:
                 col_schema['stored'] = stored
 
+            if destination is not None:
+                col_schema['destination'] = destination
+
             # Raise an error if the column expression refers to a column error property
             if isinstance(spec, exprs.Expr):
                 for e in spec.subexprs(expr_class=exprs.ColumnPropertyRef, traverse_matches=False):
@@ -671,7 +677,7 @@ class Table(SchemaObject):
         (on account of containing Python Callables or Exprs).
         """
         assert isinstance(spec, dict)
-        valid_keys = {'type', 'value', 'stored', 'media_validation'}
+        valid_keys = {'type', 'value', 'stored', 'media_validation', 'destination'}
         for k in spec:
             if k not in valid_keys:
                 raise excs.Error(f'Column {name}: invalid key {k!r}')
@@ -695,6 +701,56 @@ class Table(SchemaObject):
         if 'stored' in spec and not isinstance(spec['stored'], bool):
             raise excs.Error(f'Column {name}: "stored" must be a bool, got {spec["stored"]}')
 
+        d = spec.get('destination')
+        if d is not None and not isinstance(d, (str, Path)):
+            raise excs.Error(f'Column {name}: "destination" must be a string or path, got {d}')
+
+    @classmethod
+    def _validate_destination(cls, col_name: str, dest: Union[str, Path]) -> str:
+        """If possible, convert a Column destination parameter to a proper URI, else raise errors."""
+
+        # Convert Path to string if needed
+        if isinstance(dest, Path):
+            dest = str(dest)
+
+        # Check if it's already a valid URI scheme
+        valid_schemes: set[str] = set()  # {'s3', 'gs', 'azure'}
+        parsed = urllib.parse.urlparse(dest)
+        if parsed.scheme:
+            # For file:// URIs, check if it points to a directory
+            # len(parsed.scheme) == 1 handles Windows drive letters like C:\
+            if parsed.scheme.lower() == 'file' or len(parsed.scheme) == 1:
+                dest_path = Path(urllib.parse.unquote(parsed.path))
+            elif parsed.scheme.lower() in valid_schemes:
+                return dest
+            else:
+                raise excs.Error(
+                    f'Column {col_name}: "destination" must be a valid URI to a supported destination, got {dest}'
+                )
+
+        else:
+            # If no scheme, treat as local file path
+            dest_path = Path(dest)
+
+        # Check if path exists and validate it's a directory
+        if dest_path.exists():
+            if not dest_path.is_dir():
+                raise excs.Error(f'Column {col_name}: "destination" must be a directory, not a file: {dest}')
+        else:
+            raise excs.Error(f'Column {col_name}: "destination" does not exist: {dest}')
+
+        # Check if path is absolute
+        if dest_path.is_absolute():
+            # Convert to file URI
+            return dest_path.as_uri()
+
+        # For relative paths, convert to absolute first
+        try:
+            absolute_path = dest_path.resolve()
+            return absolute_path.as_uri()
+        except (OSError, ValueError) as e:
+            raise excs.Error(f'Column {col_name}: Invalid destination path: {dest}. Error: {str(e)!r}') from None
+
     @classmethod
     def _create_columns(cls, schema: dict[str, Any]) -> list[Column]:
         """Construct list of Columns, given schema"""
@@ -705,6 +761,7 @@ class Table(SchemaObject):
             primary_key: bool = False
             media_validation: Optional[catalog.MediaValidation] = None
             stored = True
+            destination: Optional[str] = None
 
             if isinstance(spec, (ts.ColumnType, type, _GenericAlias)):
                 col_type = ts.ColumnType.normalize_type(spec, nullable_default=True, allow_builtin_types=False)
@@ -729,6 +786,8 @@ class Table(SchemaObject):
                 media_validation = (
                     catalog.MediaValidation[media_validation_str.upper()] if media_validation_str is not None else None
                 )
+                if 'destination' in spec:
+                    destination = cls._validate_destination(name, spec['destination'])
             else:
                 raise excs.Error(f'Invalid value for column {name!r}')
 
@@ -739,6 +798,7 @@ class Table(SchemaObject):
                 stored=stored,
                 is_pk=primary_key,
                 media_validation=media_validation,
+                destination=destination,
             )
             columns.append(column)
         return columns
@@ -763,6 +823,10 @@ class Table(SchemaObject):
                     f'Column {col.name!r}: stored={col.stored} is not valid for image columns computed with a '
                     f'streaming function'
                 )
+            )
+        if col.destination is not None and not (col.stored and col.is_computed):
+            raise excs.Error(
+                f'Column {col.name!r}: destination={col.destination} only applies to stored computed columns'
             )
 
     @classmethod
