@@ -70,6 +70,7 @@ class ClientContainer:
 
     def create_client(self, storage_target: StorageTarget, soa: Optional[StorageObjectAddress]) -> Any:
         """Create a new client for the given storage target and storage object address."""
+        from .azure_store import AzureBlobStore
         from .gcs_store import GCSStore
         from .s3_store import S3Store
 
@@ -82,6 +83,8 @@ class ClientContainer:
             return S3Store.create_s3_client()
         if storage_target == StorageTarget.GS:
             return GCSStore.create_client()
+        if storage_target == StorageTarget.AZ:
+            return AzureBlobStore.create_client(soa)
         raise ValueError(f'Unsupported storage target: {storage_target}')
 
     def create_resource(self, storage_target: StorageTarget, soa: StorageObjectAddress) -> Any:

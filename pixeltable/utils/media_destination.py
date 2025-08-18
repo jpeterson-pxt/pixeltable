@@ -36,6 +36,7 @@ class MediaDestination:
     @classmethod
     def get_store(cls, dest: Optional[str], may_contain_object_name: bool, col_name: Optional[str] = None) -> Any:
         from pixeltable.env import Env
+        from pixeltable.utils.azure_store import AzureBlobStore
         from pixeltable.utils.gcs_store import GCSStore
         from pixeltable.utils.s3_store import S3Store
 
@@ -52,6 +53,8 @@ class MediaDestination:
             return S3Store(soa)
         if soa.storage_target == StorageTarget.GS and soa.scheme == 'gs':
             return GCSStore(soa)
+        if soa.storage_target == StorageTarget.AZ:
+            return AzureBlobStore(soa)
         if soa.storage_target == StorageTarget.HTTP and soa.is_http_readable:
             return HTTPStore(soa)
         error_col_name = f'Column {col_name!r}: ' if col_name is not None else ''
@@ -147,7 +150,7 @@ class MediaDestination:
         if return_uri is True, full URI's are returned; otherwise, just the object keys.
         """
         store = cls.get_store(dest, False)
-        return store.list_objects(return_uri, n_max)
+        return store.list_objects(return_uri=return_uri, n_max=n_max)
 
     @classmethod
     def list_uris(cls, source_uri: str, n_max: int = 10) -> list[str]:

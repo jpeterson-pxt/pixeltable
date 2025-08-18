@@ -154,6 +154,8 @@ dev = [
     "pixeltable-yolox==0.4.2 ; python_version < '3.13' or sys_platform != 'win32'",
     "fiftyone>=1.7",
     "google-cloud-storage>=2.18.0",
+    "azure-storage-blob==12.19.0",  # Latest stable as of early 2024
+    "azure-identity==1.15.0",  # Latest stable as of early 2024
 ]
 test = [
     "pytest>=8.4",
