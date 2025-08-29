@@ -55,7 +55,7 @@ class GCSStore(MediaStoreBase):
         """Return the prefix from the base URI."""
         return self.__prefix_name
 
-    def validate_uri(self) -> Optional[str]:
+    def validate(self) -> Optional[str]:
         """
         Checks if the URI exists.
 

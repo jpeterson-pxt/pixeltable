@@ -34,6 +34,7 @@ from pixeltable.config import Config
 from pixeltable.utils.console_output import ConsoleLogger, ConsoleMessageFilter, ConsoleOutputHandler, map_level
 from pixeltable.utils.dbms import CockroachDbms, Dbms, PostgresqlDbms
 from pixeltable.utils.http_server import make_server
+from pixeltable.utils.media_path import MediaPath, StorageObjectAddress
 
 if TYPE_CHECKING:
     import spacy
@@ -56,6 +57,7 @@ class Env:
     _log_fmt_str = '%(asctime)s %(levelname)s %(name)s %(filename)s:%(lineno)d: %(message)s'
 
     _media_dir: Optional[Path]
+    _media_soa: Optional[StorageObjectAddress]
     _file_cache_dir: Optional[Path]  # cached media files with external URL
     _dataset_cache_dir: Optional[Path]  # cached datasets (eg, pytorch or COCO)
     _log_dir: Optional[Path]  # log files
@@ -113,6 +115,7 @@ class Env:
         assert self._instance is None, 'Env is a singleton; use Env.get() to access the instance'
 
         self._media_dir = None  # computed media files
+        self._media_soa = None  # computed media files in StorageObjectAddress format
         self._file_cache_dir = None  # cached media files with external URL
         self._dataset_cache_dir = None  # cached datasets (eg, pytorch or COCO)
         self._log_dir = None  # log files
@@ -360,6 +363,7 @@ class Env:
 
         if not self._media_dir.exists():
             self._media_dir.mkdir()
+        self._media_soa = MediaPath.parse_media_storage_addr(str(self._media_dir), may_contain_object_name=False)
         if not self._file_cache_dir.exists():
             self._file_cache_dir.mkdir()
         if not self._dataset_cache_dir.exists():
@@ -770,6 +774,12 @@ class Env:
     def media_dir(self) -> Path:
         assert self._media_dir is not None
         return self._media_dir
+
+    @property
+    def media_soa(self) -> StorageObjectAddress:
+        assert self._media_dir is not None
+        assert self._media_soa is not None
+        return self._media_soa
 
     @property
     def file_cache_dir(self) -> Path:

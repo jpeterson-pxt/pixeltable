@@ -72,7 +72,7 @@ class MediaDestination:
         if soa.storage_target == 'os':
             return MediaStore.validate_destination(col_name, soa)
         store = cls.get_store(dest, soa)
-        dest2 = store.validate_uri()
+        dest2 = store.validate()
         if dest2 is not None:
             return dest2
         raise excs.Error(
