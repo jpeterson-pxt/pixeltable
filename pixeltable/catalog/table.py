@@ -762,7 +762,7 @@ class Table(SchemaObject):
                     catalog.MediaValidation[media_validation_str.upper()] if media_validation_str is not None else None
                 )
                 if 'destination' in spec:
-                    destination = MediaDestination.validate_destination(name, spec['destination'])
+                    destination = MediaDestination.validate_destination(spec['destination'], name)
             else:
                 raise excs.Error(f'Invalid value for column {name!r}')
 

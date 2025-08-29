@@ -36,31 +36,24 @@ class MediaStore(MediaStoreBase):
 
     __base_dir: Path
 
+    soa: Optional[StorageObjectAddress]
+
     def __init__(self, base_dir: Path):
         """Initialize a MediaStore with a base directory."""
         assert isinstance(base_dir, Path), 'Base directory must be a Path instance.'
         self.__base_dir = base_dir
+        self.soa = None
 
-    @staticmethod
-    def validate_destination(col_name: str, dest: StorageObjectAddress | Path) -> str:
+    def validate(self, error_col_name: str) -> str:
         """Convert a Column destination parameter to a URI, else raise errors."""
-        if isinstance(dest, Path):
-            dest_path = dest
-        else:
-            assert isinstance(dest, StorageObjectAddress), f'Invalid destination type: {type(dest)}'
-            storage_address = dest
-            if storage_address.scheme != 'file' or storage_address.storage_target != 'os':
-                raise excs.Error(
-                    f'Column {col_name}: `destination` must be a valid URI to a supported destination, got {dest!r}'
-                )
-            path_str = urllib.parse.unquote(urllib.request.url2pathname(storage_address.prefix))
-            dest_path = Path(path_str)
+        path_str = self.soa.to_path
+        dest_path = Path(path_str)
 
         # Check if path exists and validate it's a directory
         if not dest_path.exists():
-            raise excs.Error(f'Column {col_name}: `destination` does not exist: {dest}')
+            raise excs.Error(f'{error_col_name}`destination` does not exist')
         if not dest_path.is_dir():
-            raise excs.Error(f'Column {col_name}: `destination` must be a directory, not a file: {dest}')
+            raise excs.Error(f'{error_col_name}`destination` must be a directory, not a file')
 
         # Check if path is absolute
         if dest_path.is_absolute():
@@ -72,7 +65,7 @@ class MediaStore(MediaStoreBase):
             absolute_path = dest_path.resolve()
             return absolute_path.as_uri()
         except (OSError, ValueError) as e:
-            raise excs.Error(f'Column {col_name}: Invalid destination path: {dest}. Error: {str(e)!r}') from None
+            raise excs.Error(f'{error_col_name}`destination` must be a valid path. Error: {str(e)!r}') from None
 
     @staticmethod
     def file_url_to_path(url: str) -> Optional[Path]:
@@ -91,21 +84,11 @@ class MediaStore(MediaStoreBase):
         return Path(path_str)
 
     @classmethod
-    def get(cls, base_uri: Optional[str] = None) -> MediaStore:
-        """Return an instance for the specified base URI. The environment's media_dir is used if None."""
-        if base_uri is None:
-            return MediaStore(env.Env.get().media_dir)
-        base_path = cls.file_url_to_path(base_uri)
-        if base_path is None:
-            raise excs.Error(f"URI must have 'file' scheme: '{base_uri}'")
-        return MediaStore(base_path)
-
-    @classmethod
-    def from_soa(cls, soa: Optional[StorageObjectAddress] = None) -> MediaStore:
-        """Return an instance for the specified base URI. The environment's media_dir is used if None."""
-        if soa is None:
-            return MediaStore(env.Env.get().media_dir)
-        return MediaStore(soa.to_path)
+    def from_soa(cls, soa: StorageObjectAddress) -> MediaStore:
+        """Return an instance for the specified base URI. The destination is sourced from Env if None."""
+        r = MediaStore(soa.to_path)
+        r.soa = soa
+        return r
 
     @classmethod
     def _save_binary_media_file(cls, file_data: bytes, dest_path: Path, format: Optional[str]) -> Path:
@@ -131,9 +114,8 @@ class MediaStore(MediaStoreBase):
 
     def _prepare_media_path_raw(self, tbl_id: UUID, col_id: int, tbl_version: int, ext: Optional[str] = None) -> Path:
         """
-        Construct a new, unique Path name for a persisted media file, and create the parent directory
-        for the new Path if it does not already exist. The Path will reside in
-        the environment's media_dir.
+        Construct a new, unique Path name in the __base_dir for a persisted media file.
+        Create the parent directory for the new Path if it does not already exist.
         """
         prefix, filename = MediaPath.media_prefix_file_raw(tbl_id, col_id, tbl_version, ext)
         parent = self.__base_dir / Path(prefix)
@@ -142,9 +124,8 @@ class MediaStore(MediaStoreBase):
 
     def _prepare_media_path(self, col: Column, ext: Optional[str] = None) -> Path:
         """
-        Construct a new, unique Path name for a persisted media file, and create the parent directory
-        for the new Path if it does not already exist. The Path will reside in
-        the environment's media_dir.
+        Construct a new, unique Path name in the __base_dir for a persisted media file.
+        Create the parent directory for the new Path if it does not already exist.
         """
         prefix, filename = MediaPath.media_prefix_file(col, ext)
         parent = self.__base_dir / Path(prefix)
@@ -174,8 +155,8 @@ class MediaStore(MediaStoreBase):
             return None
         return file_path
 
-    def relocate_local_media_file(self, src_path: Path, col: Column) -> str:
-        """Relocate a local file to a MediaStore, and return its new URL"""
+    def move_local_media_file(self, src_path: Path, col: Column) -> str:
+        """Move a local file to a this store, and return its new URL"""
         dest_path = self._prepare_media_path(col, ext=src_path.suffix)
         src_path.rename(dest_path)
         new_file_url = urllib.parse.urljoin('file:', urllib.request.pathname2url(str(dest_path)))
@@ -183,7 +164,7 @@ class MediaStore(MediaStoreBase):
         return new_file_url
 
     def copy_local_media_file(self, col: Column, src_path: Path) -> str:
-        """Copy a local file to a MediaStore, and return its new URL"""
+        """Copy a local file to a this store, and return its new URL"""
         dest_path = self._prepare_media_path(col, ext=src_path.suffix)
         shutil.copy2(src_path, dest_path)
         new_file_url = urllib.parse.urljoin('file:', urllib.request.pathname2url(str(dest_path)))
@@ -290,8 +271,6 @@ class TempStore:
     @classmethod
     def _tmp_dir(cls) -> Path:
         """Returns the path to the temporary directory where files are stored."""
-        from pixeltable import env
-
         return env.Env.get().tmp_dir
 
     @classmethod

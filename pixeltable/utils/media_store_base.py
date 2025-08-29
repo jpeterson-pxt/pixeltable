@@ -9,13 +9,27 @@ if TYPE_CHECKING:
 
 
 class MediaStoreBase:
+    def validate(self, error_col_name: str) -> Optional[str]:
+        """Validate the media store configuration."""
+        raise NotImplementedError
+
     def count(self, tbl_id: UUID, tbl_version: Optional[int] = None) -> int:
         """Count the number of media objects for a given table ID."""
         raise NotImplementedError
 
     def copy_local_media_file(self, col: Column, src_path: Path) -> str:
-        """Copy a local media file to the media store."""
+        """Copy a local media file to the store.
+        returns uri
+        """
         raise NotImplementedError
+
+    def move_local_media_file(self, src_path: Path, col: Column) -> Optional[str]:
+        """Move a local media file to the store if possible
+        Returns:
+            uri if move occurred
+            None if move was not possible
+        """
+        return None
 
     def download_media_object(self, src_path: str, dest_path: Path) -> None:
         raise NotImplementedError

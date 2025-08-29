@@ -216,12 +216,8 @@ class ObjectStoreSaveNode(ExecNode):
             assert col.col_type.is_media_type()
 
             destination = info.col.destination
-            soa = None if destination is None else MediaPath.parse_media_storage_addr1(destination)
-            if (
-                soa is not None
-                and soa.storage_target == 'os'
-                and MediaStore.get(destination).resolve_url(url) is not None
-            ):
+            soa = None if destination is None else MediaPath.parse_media_storage_addr(destination, False)
+            if soa is not None and soa.storage_target == 'os' and MediaStore.from_soa(soa).resolve_url(url) is not None:
                 # A local non-default destination was specified, and the url already points there
                 continue
 
