@@ -55,7 +55,7 @@ class GCSStore(MediaStoreBase):
         """Return the prefix from the base URI."""
         return self.__prefix_name
 
-    def validate(self) -> Optional[str]:
+    def validate(self, error_col_name: str) -> Optional[str]:
         """
         Checks if the URI exists.
 
@@ -71,7 +71,7 @@ class GCSStore(MediaStoreBase):
             bucket.reload()  # This will raise an exception if the bucket doesn't exist
             return self.__base_uri
         except (NotFound, Forbidden, GoogleAPIError) as e:
-            self.handle_gcs_error(e, self.bucket_name, 'validate bucket')
+            self.handle_gcs_error(e, self.bucket_name, f'validate bucket {error_col_name}')
         return None
 
     def _prepare_media_uri_raw(

@@ -1,4 +1,4 @@
-import os
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 from uuid import UUID
@@ -23,6 +23,23 @@ class TestDestination:
         base_path = env.Env.get().tmp_dir / '..' / 'test_dest'
         base_path.mkdir(exist_ok=True)
         return base_path
+
+    @classmethod
+    def validate_dest(cls, dest: str) -> bool:
+        try:
+            MediaDestination.validate_destination(dest, '')
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def get_destination(cls, dest: str, backup_dest: str) -> str:
+        """If the specified destination is not valid (no credentials), use the backup destination"""
+        try:
+            MediaDestination.validate_destination(dest, '')
+            return dest
+        except Exception:
+            return backup_dest
 
     @classmethod
     def dest(cls, n: int) -> tuple[Path | str, str]:
@@ -136,8 +153,6 @@ class TestDestination:
         r &= self.parse_one(f'dir2/dir3/{o_name}', True)
 
         assert r
-
-    #        assert False
 
     def test_dest_local_2(self, reset_db: None) -> None:
         """Test destination with two local directories"""
@@ -298,7 +313,6 @@ class TestDestination:
             _, dest_uri = self.dest(i)
             assert self.count(dest_uri, save_id) == 0
 
-    @pytest.mark.skipif(os.getenv('TEST_DEST_ALL', '').lower() != 'true', reason='Requires credentials for all clouds')
     def test_dest_all(self, reset_db: None) -> None:
         """Test destination with all available storage targets"""
         n = 1
@@ -306,29 +320,33 @@ class TestDestination:
         if not dest_path.exists():
             dest_path.mkdir()
         lc_uri = dest_path.resolve().as_uri()
-        gs_uri = f'gs://pixeltable/my_folder/img_rot{n}'
-        s3_uri = f's3://jimpeterson-test/img_rot{n}'
-        r2_uri = (
-            f'https://a711169187ea0f395c01dca4390ee0ea.r2.cloudflarestorage.com/jimpeterson-testr2/images/img_rot{n}'
+        c2_uri = self.get_destination(f'gs://pixeltable/my_folder/img_rot{n}', lc_uri)
+        c3_uri = self.get_destination(f's3://jimpeterson-test/img_rot{n}', lc_uri)
+        c4_uri = self.get_destination(
+            f'https://a711169187ea0f395c01dca4390ee0ea.r2.cloudflarestorage.com/jimpeterson-testr2/images/img_rot{n}',
+            lc_uri,
         )
         t = pxt.create_table('test_dest', schema={'img': pxt.Image})
         t.insert([{'img': 'tests/data/imagenette2-160/ILSVRC2012_val_00000557.JPEG'}])
         t.add_computed_column(**{'img_rot_1': t.img.rotate(90)}, destination=lc_uri)
-        t.add_computed_column(**{'img_rot_2': t.img.rotate(180)}, destination=gs_uri)
-        t.add_computed_column(**{'img_rot_3': t.img.rotate(270)}, destination=s3_uri)
-        t.add_computed_column(**{'img_rot_4': t.img.rotate(360)}, destination=r2_uri)
+        t.add_computed_column(**{'img_rot_2': t.img.rotate(180)}, destination=c2_uri)
+        t.add_computed_column(**{'img_rot_3': t.img.rotate(270)}, destination=c3_uri)
+        t.add_computed_column(**{'img_rot_4': t.img.rotate(360)}, destination=c4_uri)
         t.insert([{'img': 'tests/data/imagenette2-160/ILSVRC2012_val_00000557.JPEG'}])
 
         tbl_id = t._id
         assert t.count() == 2
-        for t_uri in [lc_uri, gs_uri, s3_uri, r2_uri]:
-            assert self.count(t_uri, tbl_id) == 2
+        target_count: dict[str, int] = defaultdict(int)
+        for t_uri in [lc_uri, c2_uri, c3_uri, c4_uri]:
+            target_count[t_uri] += 2
+        for t_uri in [lc_uri, c2_uri, c3_uri, c4_uri]:
+            assert self.count(t_uri, tbl_id) == target_count[t_uri]
 
         r_dest = t.select(
             t.img.fileurl, t.img_rot_1.fileurl, t.img_rot_2.fileurl, t.img_rot_3.fileurl, t.img_rot_4.fileurl
         ).collect()
         print(r_dest)
-        for t_uri in [lc_uri, gs_uri, s3_uri, r2_uri]:
+        for t_uri in [lc_uri, c2_uri, c3_uri, c4_uri]:
             olist = MediaDestination.list_uris(t_uri, n_max=20)
             print('list of files in the destination')
             for item in olist:
@@ -336,7 +354,7 @@ class TestDestination:
             assert len(olist) >= 2
 
         pxt.drop_table(t)
-        for t_uri in [lc_uri, gs_uri, s3_uri, r2_uri]:
+        for t_uri in [lc_uri, c2_uri, c3_uri, c4_uri]:
             assert self.count(t_uri, tbl_id) == 0
 
     def test_dest_list(self, reset_db: None) -> None:
@@ -366,3 +384,37 @@ class TestDestination:
         for item in olist:
             print(item)
         assert len(olist) >= 2
+
+    def dest_public_test(self, src_base: str, src_obj: str) -> None:
+        """Test downloading a media object from Azure Blob Storage"""
+        from pixeltable.utils.media_store import TempStore
+
+        src_uri = src_base + src_obj
+        if not self.validate_dest(src_base):
+            return
+
+        # Download a media object from Azure Blob Storage
+        temp_path = TempStore.create_path()
+        MediaDestination.download_media_object(src_uri, temp_path)
+
+        # Check that the file was downloaded successfully
+        assert temp_path.exists()
+        assert temp_path.stat().st_size > 0
+        print(f'\nDownloaded: {temp_path}, {temp_path.stat().st_size}')
+
+        # Clean up the temporary file
+        temp_path.unlink()
+
+        r = MediaDestination.list_objects(src_base, return_uri=True, n_max=20)
+        print(f'List of objects in {src_base}:')
+        for item in r:
+            print(item)
+        assert len(r) > 2
+
+    def test_dest_public_s3(self, reset_db: None) -> None:
+        """Test s3 interfaces on public bucket / object"""
+        self.dest_public_test('s3://open-images-dataset/validation/', '3c02ca9ec9b2b77b.jpg')
+
+    def test_dest_public_az(self, reset_db: None) -> None:
+        """Test Azure interfaces on public bucket / object"""
+        self.dest_public_test('https://azureopendatastorage.blob.core.windows.net/mnist/', 'train-images-idx3-ubyte.gz')

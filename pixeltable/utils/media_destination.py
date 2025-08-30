@@ -72,12 +72,11 @@ class MediaDestination:
         if soa.storage_target == 'os':
             return MediaStore.validate_destination(col_name, soa)
         store = cls.get_store(dest, soa)
-        dest2 = store.validate()
+        error_col_name = f'Column {col_name}: ' if col_name is not None else ''
+        dest2 = store.validate(error_col_name)
         if dest2 is not None:
             return dest2
-        raise excs.Error(
-            f'Column {col_name}: `destination` must be a valid URI to a supported destination, got {dest!r}'
-        )
+        raise excs.Error(f'{error_col_name}`destination` must be a valid URI to a supported destination, got {dest!r}')
 
     @classmethod
     def download_media_object(cls, src_uri: str, dest_path: Path) -> None:

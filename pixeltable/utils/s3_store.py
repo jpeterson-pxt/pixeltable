@@ -64,7 +64,7 @@ class S3Store(MediaStoreBase):
         """Return the prefix from the base URI."""
         return self.__prefix_name
 
-    def validate(self) -> Optional[str]:
+    def validate(self, error_col_name: str) -> Optional[str]:
         """
         Checks if the URI exists.
 
@@ -77,7 +77,7 @@ class S3Store(MediaStoreBase):
             self.client().head_bucket(Bucket=self.bucket_name)
             return self.__base_uri
         except ClientError as e:
-            self.handle_s3_error(e, self.bucket_name, 'validate bucket')
+            self.handle_s3_error(e, self.bucket_name, f'validate bucket {error_col_name}')
         return None
 
     def _prepare_media_uri_raw(
