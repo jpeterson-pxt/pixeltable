@@ -91,7 +91,7 @@ class GCSStore(MediaStoreBase):
         assert col.tbl is not None, 'Column must be associated with a table'
         return self._prepare_media_uri_raw(col.tbl.id, col.id, col.tbl.version, ext=ext)
 
-    def copy_local_media_file(self, col: Column, src_path: Path) -> str:
+    def copy_local_file(self, col: Column, src_path: Path) -> str:
         """Copy a local file, and return its new URL"""
         from google.api_core.exceptions import GoogleAPIError
 

@@ -155,15 +155,15 @@ class MediaStore(MediaStoreBase):
             return None
         return file_path
 
-    def move_local_media_file(self, src_path: Path, col: Column) -> str:
-        """Move a local file to a this store, and return its new URL"""
+    def move_local_file(self, col: Column, src_path: Path) -> str:
+        """Move a local file to this store, and return its new URL"""
         dest_path = self._prepare_media_path(col, ext=src_path.suffix)
         src_path.rename(dest_path)
         new_file_url = urllib.parse.urljoin('file:', urllib.request.pathname2url(str(dest_path)))
         _logger.debug(f'Media Storage: moved {src_path} to {new_file_url}')
         return new_file_url
 
-    def copy_local_media_file(self, col: Column, src_path: Path) -> str:
+    def copy_local_file(self, col: Column, src_path: Path) -> str:
         """Copy a local file to a this store, and return its new URL"""
         dest_path = self._prepare_media_path(col, ext=src_path.suffix)
         shutil.copy2(src_path, dest_path)

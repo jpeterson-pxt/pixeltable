@@ -107,7 +107,7 @@ class S3Store(MediaStoreBase):
             self.handle_s3_error(e, self.bucket_name, f'download file {src_path}')
             raise
 
-    def copy_local_media_file(self, col: Column, src_path: Path) -> str:
+    def copy_local_file(self, col: Column, src_path: Path) -> str:
         """Copy a local file, and return its new URL"""
         from botocore.exceptions import ClientError
 

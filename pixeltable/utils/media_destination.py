@@ -55,7 +55,9 @@ class MediaDestination:
         if soa.storage_target == 'http' and soa.is_http_readable:
             return HTTPStore(soa)
         error_col_name = f'Column {col_name!r}: ' if col_name is not None else ''
-        raise excs.Error(f'{error_col_name}`destination` must be a valid URI to a supported destination, got {dest!r}')
+        raise excs.Error(
+            f'{error_col_name}`destination` must be a valid reference to a supported destination, got {dest!r}'
+        )
 
     @classmethod
     def validate_destination(cls, dest: str | Path | None, col_name: Optional[str]) -> str:
@@ -102,25 +104,25 @@ class MediaDestination:
         store = cls.get_store(dest, False, col.name)
         # Attempt to move
         if relocate_or_delete:
-            moved_file_url = store.move_local_media_file(src_path, col)
+            moved_file_url = store.move_local_file(col, src_path)
             if moved_file_url is not None:
                 return moved_file_url
-        new_file_url = store.copy_local_media_file(col, src_path)
+        new_file_url = store.copy_local_file(col, src_path)
         if relocate_or_delete:
             TempStore.delete_media_file(src_path)
         return new_file_url
 
     @classmethod
-    def move_file(cls, col: Column, src_path: Path) -> str:
-        """Move a file to the destination, returning the file's URL within the destination."""
+    def move_local_file(cls, col: Column, src_path: Path) -> str:
+        """Move a file to the destination specified by the Column, returning the file's URL within the destination."""
         store = cls.get_store(col.destination, False, col.name)
-        return store.move_local_media_file(src_path, col)
+        return store.move_local_file(col, src_path)
 
     @classmethod
-    def copy_file(cls, col: Column, src_path: Path) -> str:
-        """Copy a file to the destination, returning the file's URL within the destination."""
+    def copy_local_file(cls, col: Column, src_path: Path) -> str:
+        """Copy a file to the destination specified by the Column, returning the file's URL within the destination."""
         store = cls.get_store(col.destination, False, col.name)
-        return store.copy_local_media_file(col, src_path)
+        return store.copy_local_file(col, src_path)
 
     @classmethod
     def delete(cls, dest: Optional[str], tbl_id: UUID, tbl_version: Optional[int] = None) -> Optional[int]:
