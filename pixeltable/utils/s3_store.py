@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
-from pixeltable import exceptions as excs
+from pixeltable import env, exceptions as excs
 from pixeltable.env import Env
 from pixeltable.utils.client_container import ClientContainer
 from pixeltable.utils.media_path import MediaPath, StorageObjectAddress
@@ -71,6 +71,7 @@ class S3Store(MediaStoreBase):
         Returns:
             bool: True if the S3 URI exists and is accessible, False otherwise.
         """
+        env.Env.get().require_package('boto3')
         from botocore.exceptions import ClientError
 
         try:

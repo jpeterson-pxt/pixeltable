@@ -674,10 +674,12 @@ class Env:
     def __register_packages(self) -> None:
         """Declare optional packages that are utilized by some parts of the code."""
         self.__register_package('anthropic')
+        self.__register_package('azure.storage.blob', library_name='azure-storage-blob')
         self.__register_package('boto3')
         self.__register_package('datasets')
         self.__register_package('fiftyone')
         self.__register_package('fireworks', library_name='fireworks-ai')
+        self.__register_package('google.cloud.storage', library_name='google-cloud-storage')
         self.__register_package('google.genai', library_name='google-genai')
         self.__register_package('groq')
         self.__register_package('huggingface_hub', library_name='huggingface-hub')

@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
-from pixeltable import exceptions as excs
+from pixeltable import env, exceptions as excs
 from pixeltable.utils.client_container import ClientContainer
 from pixeltable.utils.media_path import MediaPath, StorageObjectAddress
 from pixeltable.utils.media_store_base import MediaStoreBase
@@ -62,6 +62,8 @@ class GCSStore(MediaStoreBase):
         Returns:
             str: The base URI if the GCS bucket exists and is accessible, None otherwise.
         """
+        env.Env.get().require_package('google.cloud.storage')
+
         from google.api_core.exceptions import GoogleAPIError
         from google.cloud.exceptions import Forbidden, NotFound
 
