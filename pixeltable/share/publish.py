@@ -14,6 +14,7 @@ import pixeltable as pxt
 from pixeltable import exceptions as excs
 from pixeltable.env import Env
 from pixeltable.utils import sha256sum
+from pixeltable.utils.media_path import StorageObjectAddress, StorageTarget
 from pixeltable.utils.media_store import TempStore
 
 from .packager import TablePackager, TableRestorer
@@ -91,7 +92,8 @@ def _upload_bundle_to_s3(bundle: Path, parsed_location: urllib.parse.ParseResult
 
     Env.get().console_logger.info(f'Uploading snapshot to: {bucket}:{remote_path}')
 
-    s3_client = ClientContainer.get().get_client(storage_target='s3', soa=None)
+    soa = StorageObjectAddress(StorageTarget.S3, scheme='s3')
+    s3_client = ClientContainer.get().get_client(soa)
 
     upload_args = {'ChecksumAlgorithm': 'SHA256'}
 
@@ -147,7 +149,8 @@ def _download_bundle_from_s3(parsed_location: urllib.parse.ParseResult, bundle_f
 
     Env.get().console_logger.info(f'Downloading snapshot from: {bucket}:{remote_path}')
 
-    s3_client = ClientContainer.get().get_client(storage_target='s3', soa=None)
+    soa = StorageObjectAddress(StorageTarget.S3, scheme='s3')
+    s3_client = ClientContainer.get().get_client(soa=soa)
 
     obj = s3_client.head_object(Bucket=bucket, Key=remote_path)  # Check if the object exists
     bundle_size = obj['ContentLength']

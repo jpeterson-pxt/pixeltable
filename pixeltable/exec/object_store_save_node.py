@@ -13,7 +13,7 @@ from pixeltable import exprs
 from pixeltable.env import Env
 from pixeltable.utils.client_container import ClientContainer
 from pixeltable.utils.media_destination import MediaDestination
-from pixeltable.utils.media_path import MediaPath
+from pixeltable.utils.media_path import MediaPath, StorageTarget
 from pixeltable.utils.media_store import MediaStore, TempStore
 
 from .data_row_batch import DataRowBatch
@@ -217,7 +217,11 @@ class ObjectStoreSaveNode(ExecNode):
 
             destination = info.col.destination
             soa = None if destination is None else MediaPath.parse_media_storage_addr(destination, False)
-            if soa is not None and soa.storage_target == 'os' and MediaStore.from_soa(soa).resolve_url(url) is not None:
+            if (
+                soa is not None
+                and soa.storage_target == StorageTarget.OS
+                and MediaStore.from_soa(soa).resolve_url(url) is not None
+            ):
                 # A local non-default destination was specified, and the url already points there
                 continue
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import re
 import urllib.parse
 import urllib.request
@@ -12,17 +13,28 @@ if TYPE_CHECKING:
     from pixeltable.catalog import Column
 
 
+class StorageTarget(enum.Enum):
+    """Enumeration of storage kinds."""
+
+    OS = 'os'  # Local file system
+    S3 = 's3'  # Amazon S3
+    R2 = 'r2'  # Cloudflare R2
+    GS = 'gs'  # Google Cloud Storage
+    AZ = 'az'  # Azure Blob Storage
+    HTTP = 'http'  # HTTP/HTTPS
+
+
 class StorageObjectAddress(NamedTuple):
     """Contains components of a media address.
     Unused components are empty strings.
     """
 
-    storage_target: str
+    storage_target: StorageTarget
     scheme: str
-    account: str
-    account_extension: str
-    container: str
-    key: str
+    account: str = ''
+    account_extension: str = ''
+    container: str = ''
+    key: str = ''
     prefix: str = ''
     object_name: str = ''
 
@@ -40,7 +52,14 @@ class StorageObjectAddress(NamedTuple):
 
     @property
     def has_valid_storage_target(self) -> bool:
-        return self.storage_target in ['os', 's3', 'r2', 'gs', 'az', 'http']
+        return self.storage_target in [
+            StorageTarget.OS,
+            StorageTarget.S3,
+            StorageTarget.R2,
+            StorageTarget.GS,
+            StorageTarget.AZ,
+            StorageTarget.HTTP,
+        ]
 
     @property
     def prefix_free_uri(self) -> str:
@@ -65,7 +84,7 @@ class StorageObjectAddress(NamedTuple):
 
     @property
     def to_path(self) -> Path:
-        assert self.storage_target == 'os'
+        assert self.storage_target == StorageTarget.OS
         assert self.prefix
         path_str = urllib.parse.unquote(urllib.request.url2pathname(self.prefix))
         return Path(path_str)
@@ -171,12 +190,12 @@ class MediaPath:
 
         # len(parsed.scheme) == 1 handles Windows drive letters like C:\
         if scheme == 'file' or len(scheme) == 1:
-            storage_target = 'os'
+            storage_target = StorageTarget.OS
             scheme = 'file'
             key = parsed.path
 
         elif scheme in ('s3', 'gs'):
-            storage_target = scheme
+            storage_target = StorageTarget.S3 if scheme == 's3' else StorageTarget.GS
             container = parsed.netloc
             key = parsed.path.lstrip('/')
 
@@ -184,7 +203,7 @@ class MediaPath:
             # Azure-specific URI schemes
             # wasb[s]://container@account.blob.core.windows.net/<optional prefix>/<optional object>
             # abfs[s]://container@account.dfs.core.windows.net/<optional prefix>/<optional object>
-            storage_target = 'az'
+            storage_target = StorageTarget.AZ
             container_and_account = parsed.netloc
             if '@' in container_and_account:
                 container, account_host = container_and_account.split('@', 1)
@@ -201,12 +220,12 @@ class MediaPath:
             # and possibly others
             key = parsed.path
             if 'cloudflare' in parsed.netloc:
-                storage_target = 'r2'
+                storage_target = StorageTarget.R2
             elif 'windows' in parsed.netloc:
-                storage_target = 'az'
+                storage_target = StorageTarget.AZ
             else:
-                storage_target = 'http'
-            if storage_target in ['s3', 'az', 'r2']:
+                storage_target = StorageTarget.HTTP
+            if storage_target in [StorageTarget.S3, StorageTarget.AZ, StorageTarget.R2]:
                 account_name = parsed.netloc.split('.', 1)[0]
                 account_extension = parsed.netloc.split('.', 1)[1]
                 path_parts = key.lstrip('/').split('/', 1)

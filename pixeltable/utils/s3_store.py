@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional
 from pixeltable import env, exceptions as excs
 from pixeltable.env import Env
 from pixeltable.utils.client_container import ClientContainer
-from pixeltable.utils.media_path import MediaPath, StorageObjectAddress
+from pixeltable.utils.media_path import MediaPath, StorageObjectAddress, StorageTarget
 from pixeltable.utils.media_store_base import MediaStoreBase
 
 if TYPE_CHECKING:
@@ -42,17 +42,17 @@ class S3Store(MediaStoreBase):
         self.soa = soa
         self.__bucket_name = self.soa.container
         self.__prefix_name = self.soa.prefix
-        assert self.soa.storage_target in {'r2', 's3'}, (
+        assert self.soa.storage_target in {StorageTarget.R2, StorageTarget.S3}, (
             f'Expected storage_target "s3" or "r2", got {self.soa.storage_target}'
         )
         self.__base_uri = self.soa.prefix_free_uri + self.soa.prefix
 
     def client(self) -> Any:
         """Return the S3 client."""
-        return ClientContainer.get().get_client(storage_target=self.soa.storage_target, soa=self.soa)
+        return ClientContainer.get().get_client(self.soa)
 
     def get_resource(self) -> Any:
-        return ClientContainer.get().get_resource(storage_target=self.soa.storage_target, soa=self.soa)
+        return ClientContainer.get().get_resource(self.soa)
 
     @property
     def bucket_name(self) -> str:
@@ -115,7 +115,7 @@ class S3Store(MediaStoreBase):
         new_file_uri = self._prepare_media_uri(col, ext=src_path.suffix)
         parsed = urllib.parse.urlparse(new_file_uri)
         key = parsed.path.lstrip('/')
-        if self.soa.storage_target == 'r2':
+        if self.soa.storage_target == StorageTarget.R2:
             key = key.split('/', 1)[-1]  # Remove the bucket name from the key for R2
         try:
             _logger.debug(f'Media Storage: copying {src_path} to {new_file_uri} : Key: {key}')
@@ -291,7 +291,7 @@ class S3Store(MediaStoreBase):
     @classmethod
     def get_r2_client_args(cls, soa: StorageObjectAddress) -> dict[str, Any]:
         client_args = {}
-        if soa.storage_target == 'r2':
+        if soa.storage_target == StorageTarget.R2:
             a_key = os.getenv('R2_ACCESS_KEY', '')
             s_key = os.getenv('R2_SECRET_KEY', '')
             if a_key and s_key:

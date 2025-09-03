@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from pixeltable import exceptions as excs
-from pixeltable.utils.media_path import MediaPath, StorageObjectAddress
+from pixeltable.utils.media_path import MediaPath, StorageObjectAddress, StorageTarget
 from pixeltable.utils.media_store import MediaStore, TempStore
 from pixeltable.utils.media_store_base import MediaStoreBase
 
@@ -44,15 +44,15 @@ class MediaDestination:
             if dest is None
             else MediaPath.parse_media_storage_addr(dest, may_contain_object_name=may_contain_object_name)
         )
-        if soa.storage_target == 'os':
+        if soa.storage_target == StorageTarget.OS:
             return MediaStore.from_soa(soa)
-        if soa.storage_target == 's3' and soa.scheme == 's3':
+        if soa.storage_target == StorageTarget.S3 and soa.scheme == 's3':
             return S3Store(soa)
-        if soa.storage_target == 'r2':
+        if soa.storage_target == StorageTarget.R2:
             return S3Store(soa)
-        if soa.storage_target == 'gs' and soa.scheme == 'gs':
+        if soa.storage_target == StorageTarget.GS and soa.scheme == 'gs':
             return GCSStore(soa)
-        if soa.storage_target == 'http' and soa.is_http_readable:
+        if soa.storage_target == StorageTarget.HTTP and soa.is_http_readable:
             return HTTPStore(soa)
         error_col_name = f'Column {col_name!r}: ' if col_name is not None else ''
         raise excs.Error(

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 from pixeltable import env, exceptions as excs
 from pixeltable.utils.client_container import ClientContainer
-from pixeltable.utils.media_path import MediaPath, StorageObjectAddress
+from pixeltable.utils.media_path import MediaPath, StorageObjectAddress, StorageTarget
 from pixeltable.utils.media_store_base import MediaStoreBase
 
 if TYPE_CHECKING:
@@ -34,16 +34,15 @@ class GCSStore(MediaStoreBase):
     soa: StorageObjectAddress
 
     def __init__(self, soa: StorageObjectAddress):
-        assert soa.storage_target == 'gs', f'Expected storage_target "gs", got {soa.storage_target}'
+        assert soa.storage_target == StorageTarget.GS, f'Expected storage_target "gs", got {soa.storage_target}'
         self.soa = soa
         self.__base_uri = soa.prefix_free_uri + soa.prefix
         self.__bucket_name = soa.container
         self.__prefix_name = soa.prefix
 
-    @classmethod
-    def client(cls) -> Any:
+    def client(self) -> Any:
         """Return the GCS client."""
-        return ClientContainer.get().get_client(storage_target='gs', soa=None)
+        return ClientContainer.get().get_client(self.soa)
 
     @property
     def bucket_name(self) -> str:
@@ -63,7 +62,6 @@ class GCSStore(MediaStoreBase):
             str: The base URI if the GCS bucket exists and is accessible, None otherwise.
         """
         env.Env.get().require_package('google.cloud.storage')
-
         from google.api_core.exceptions import GoogleAPIError
         from google.cloud.exceptions import Forbidden, NotFound
 
