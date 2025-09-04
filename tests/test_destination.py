@@ -1,4 +1,4 @@
-from __future__ import annotations
+# from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
@@ -216,10 +216,12 @@ class TestDestination:
         assert self.count(dest1_uri, save_id) == 0
         assert self.count(dest2_uri, save_id) == 0
 
-    @pytest.mark.parametrize('dest_id', ['fs', 'gs', 's3', 'r2', 'az'])
+    @pytest.mark.parametrize('dest_id', ['fs', 'r2', 's3', 'gs', 'az'])  # ['fs', 'gs', 's3', 'r2', 'az'])
     def test_dest_local_two_copy(self, reset_db: None, dest_id: str) -> None:
         """Test destination with two Stores receiving copies of the same computed image"""
         if not self.validate_dest(self.dest2(1, dest_id)[1]):
+            if dest_id == 'r2':
+                raise AssertionError('R2 destination should be valid for this test')
             pytest.skip(f'Destination {dest_id} not installed or not reachable')
 
         # Create two valid local file Paths for images

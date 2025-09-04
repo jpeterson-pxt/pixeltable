@@ -1,4 +1,4 @@
-from __future__ import annotations
+# from __future__ import annotations
 
 import logging
 import re
@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from pixeltable.catalog import Column
 
 _logger = logging.getLogger('pixeltable')
+
+
+@env.register_client('gs')
+def _() -> Any:
+    return GCSStore.create_client()
 
 
 class GCSStore(MediaStoreBase):
@@ -42,6 +47,10 @@ class GCSStore(MediaStoreBase):
 
     def client(self) -> Any:
         """Return the GCS client."""
+        return env.Env.get().get_client(
+            str(self.soa.storage_target),
+        )
+ 
         return ClientContainer.get().get_client(self.soa)
 
     @property
@@ -84,14 +93,14 @@ class GCSStore(MediaStoreBase):
         parent = f'{self.__base_uri}{prefix}'
         return f'{parent}/{filename}'
 
-    def _prepare_media_uri(self, col: Column, ext: Optional[str] = None) -> str:
+    def _prepare_media_uri(self, col: 'Column', ext: Optional[str] = None) -> str:
         """
         Construct a new, unique URI for a persisted media file.
         """
         assert col.tbl is not None, 'Column must be associated with a table'
         return self._prepare_media_uri_raw(col.tbl.id, col.id, col.tbl.version, ext=ext)
 
-    def copy_local_file(self, col: Column, src_path: Path) -> str:
+    def copy_local_file(self, col: 'Column', src_path: Path) -> str:
         """Copy a local file, and return its new URL"""
         from google.api_core.exceptions import GoogleAPIError
 

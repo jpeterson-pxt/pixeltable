@@ -23,6 +23,9 @@ class StorageTarget(enum.Enum):
     AZ = 'az'  # Azure Blob Storage
     HTTP = 'http'  # HTTP/HTTPS
 
+    def __str__(self) -> str:
+        return self.value
+
 
 class StorageObjectAddress(NamedTuple):
     """Contains components of a media address.

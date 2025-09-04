@@ -1,4 +1,4 @@
-from __future__ import annotations
+# from __future__ import annotations
 
 import logging
 import os
@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 from pixeltable import env, exceptions as excs
-from pixeltable.env import Env
 from pixeltable.utils.client_container import ClientContainer
 from pixeltable.utils.media_path import MediaPath, StorageObjectAddress, StorageTarget
 from pixeltable.utils.media_store_base import MediaStoreBase
@@ -20,6 +19,40 @@ if TYPE_CHECKING:
     from pixeltable.catalog import Column
 
 _logger = logging.getLogger('pixeltable')
+
+
+@env.register_client('r2')
+def _(access_key: str, secret_key: str, endpoint_url: str) -> Any:
+    client_args: dict[str, Any] = {
+        'aws_access_key_id': access_key,
+        'aws_secret_access_key': secret_key,
+        'region_name': 'auto',
+        'endpoint_url': endpoint_url,
+    }
+    return S3Store.get_boto_client(client_args)
+
+
+@env.register_client('r2', 'resource')
+def _(access_key: str, secret_key: str, endpoint_url: str) -> Any:
+    client_args: dict[str, Any] = {
+        'aws_access_key_id': access_key,
+        'aws_secret_access_key': secret_key,
+        'region_name': 'auto',
+        'endpoint_url': endpoint_url,
+    }
+    return S3Store.create_boto_resource(client_args)
+
+
+@env.register_client('s3')
+def _() -> Any:
+    client_args: dict[str, Any] = {}
+    return S3Store.get_boto_client(client_args)
+
+
+@env.register_client('s3', 'resource')
+def _() -> Any:
+    client_args: dict[str, Any] = {}
+    return S3Store.create_boto_resource(client_args)
 
 
 class S3Store(MediaStoreBase):
@@ -49,9 +82,20 @@ class S3Store(MediaStoreBase):
 
     def client(self) -> Any:
         """Return the S3 client."""
+        return env.Env.get().get_client(
+            str(self.soa.storage_target),
+            additional_args={'endpoint_url': self.soa.container_free_uri} if self.soa and self.soa.container_free_uri else None,
+        )
+ 
         return ClientContainer.get().get_client(self.soa)
 
     def get_resource(self) -> Any:
+        return env.Env.get().get_client(
+            str(self.soa.storage_target),
+            variant='resource',
+            additional_args={'endpoint_url': self.soa.container_free_uri} if self.soa and self.soa.container_free_uri else None,
+        )
+ 
         return ClientContainer.get().get_resource(self.soa)
 
     @property
@@ -91,7 +135,7 @@ class S3Store(MediaStoreBase):
         parent = f'{self.__base_uri}{prefix}'
         return f'{parent}/{filename}'
 
-    def _prepare_media_uri(self, col: Column, ext: Optional[str] = None) -> str:
+    def _prepare_media_uri(self, col: 'Column', ext: Optional[str] = None) -> str:
         """
         Construct a new, unique URI for a persisted media file.
         """
@@ -108,7 +152,7 @@ class S3Store(MediaStoreBase):
             self.handle_s3_error(e, self.bucket_name, f'download file {src_path}')
             raise
 
-    def copy_local_file(self, col: Column, src_path: Path) -> str:
+    def copy_local_file(self, col: 'Column', src_path: Path) -> str:
         """Copy a local file, and return its new URL"""
         from botocore.exceptions import ClientError
 
@@ -256,7 +300,7 @@ class S3Store(MediaStoreBase):
 
     @classmethod
     def handle_s3_error(
-        cls, e: ClientError, bucket_name: str, operation: str = '', *, ignore_404: bool = False
+        cls, e: 'ClientError', bucket_name: str, operation: str = '', *, ignore_404: bool = False
     ) -> None:
         error_code = e.response.get('Error', {}).get('Code')
         error_message = e.response.get('Error', {}).get('Message', str(e))
@@ -273,61 +317,57 @@ class S3Store(MediaStoreBase):
 
     @classmethod
     def client_max_connections(cls) -> int:
-        cpu_count = Env.get().cpu_count
+        cpu_count = env.Env.get().cpu_count
         return max(5, 4 * cpu_count)
 
     @classmethod
     def create_s3_client(cls) -> Any:
         """Get a raw client without any locking"""
+        return env.Env.get().get_client('s3')
         client_args: dict[str, Any] = {}
-        client_config = {
-            'max_pool_connections': cls.client_max_connections(),
-            'connect_timeout': 15,
-            'read_timeout': 30,
-            'retries': {'max_attempts': 3, 'mode': 'adaptive'},
-        }
-        return cls.get_boto_client(client_args, client_config)
+        return cls.get_boto_client(client_args)
 
     @classmethod
     def get_r2_client_args(cls, soa: StorageObjectAddress) -> dict[str, Any]:
-        client_args = {}
-        if soa.storage_target == StorageTarget.R2:
-            a_key = os.getenv('R2_ACCESS_KEY', '')
-            s_key = os.getenv('R2_SECRET_KEY', '')
-            if a_key and s_key:
-                client_args = {
-                    'aws_access_key_id': a_key,
-                    'aws_secret_access_key': s_key,
-                    'region_name': 'auto',
-                    'endpoint_url': soa.container_free_uri,
-                }
+        client_args: dict[str, Any] = {}
+        a_key = os.getenv('R2_ACCESS_KEY', '')
+        s_key = os.getenv('R2_SECRET_KEY', '')
+        if a_key and s_key:
+            client_args = {
+                'aws_access_key_id': a_key,
+                'aws_secret_access_key': s_key,
+                'region_name': 'auto',
+                'endpoint_url': soa.container_free_uri,
+            }
         return client_args
 
     @classmethod
     def create_r2_client(cls, soa: StorageObjectAddress) -> Any:
+        return env.Env.get().get_client('r2', additional_args={'endpoint_url': soa.container_free_uri})
         client_args = cls.get_r2_client_args(soa)
-        client_config = {
+        return cls.get_boto_client(client_args)
+
+    @classmethod
+    def get_boto_client(cls, client_args: dict[str, Any]) -> Any:
+        import boto3
+        import botocore
+
+        config_args: dict[str, Any] = {
             'max_pool_connections': cls.client_max_connections(),
             'connect_timeout': 15,
             'read_timeout': 30,
             'retries': {'max_attempts': 3, 'mode': 'adaptive'},
         }
-        return cls.get_boto_client(client_args, client_config)
-
-    @classmethod
-    def get_boto_client(cls, client_args: dict[str, Any], config_args: dict[str, Any]) -> Any:
-        import boto3
-        import botocore
 
         try:
+            config = botocore.config.Config(**config_args)
             if len(client_args) == 0:
-                # No client args supplibed, attempt to get default (s3) credentials
+                # No client args supplied, attempt to get default (s3) credentials
                 boto3.Session().get_credentials().get_frozen_credentials()
-                config = botocore.config.Config(**config_args)
                 return boto3.client('s3', config=config)  # credentials are available
             else:
                 # If client args are provided, use them directly
-                config = botocore.config.Config(**config_args)
+                #                config = botocore.config.Config(**config_args)
                 return boto3.client('s3', **client_args, config=config)
         except AttributeError:
             # No credentials available, use unsigned mode

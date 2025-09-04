@@ -1,9 +1,9 @@
-from __future__ import annotations
+# from __future__ import annotations
 
 import threading
 from typing import Any, Optional
 
-from pixeltable.env import Env
+from pixeltable import env
 from pixeltable.utils.media_path import StorageObjectAddress, StorageTarget
 
 
@@ -27,10 +27,10 @@ class ClientContainer:
     client_max_connections: int  # Total number of connections when creating client
 
     client_config: dict[str, Any]
-    __instance: Optional[ClientContainer] = None
+    __instance: Optional['ClientContainer'] = None
 
     @classmethod
-    def get(cls) -> ClientContainer:
+    def get(cls) -> 'ClientContainer':
         if cls.__instance is None:
             cls.__instance = cls()
         return cls.__instance
@@ -41,11 +41,15 @@ class ClientContainer:
         self.clients = {}
         self.resources = {}
 
-        cpu_count = Env.get().cpu_count
+        cpu_count = env.Env.get().cpu_count
         self.client_max_connections = max(5, 4 * cpu_count)
 
     def get_client(self, soa: Optional[StorageObjectAddress]) -> Any:
         """Get the current client for the given target, creating one if needed"""
+        return env.Env.get().get_client(
+            str(soa.storage_target),
+            additional_args={'endpoint_url': soa.container_free_uri} if soa and soa.container_free_uri else None,
+        )
         with self.client_lock:
             if soa.storage_target not in self.clients:
                 self.clients[soa.storage_target] = self.create_client(soa.storage_target, soa)
@@ -54,6 +58,11 @@ class ClientContainer:
 
     def get_resource(self, soa: StorageObjectAddress) -> Any:
         """Return the current resource for the given target, creating one if needed"""
+        return env.Env.get().get_client(
+            str(soa.storage_target),
+            variant='resource',
+            additional_args={'endpoint_url': soa.container_free_uri} if soa and soa.container_free_uri else None,
+        )
         with self.client_lock:
             if soa.storage_target not in self.resources:
                 self.resources[soa.storage_target] = self.create_resource(soa.storage_target, soa)
@@ -66,8 +75,10 @@ class ClientContainer:
 
         if storage_target == StorageTarget.R2:
             assert soa is not None
+            return env.Env.get().get_client('r2', additional_args={'endpoint_url': soa.container_free_uri})
             return S3Store.create_r2_client(soa)
         if storage_target == StorageTarget.S3:
+            return env.Env.get().get_client('s3')
             return S3Store.create_s3_client()
         if storage_target == StorageTarget.GS:
             return GCSStore.create_client()
@@ -77,8 +88,12 @@ class ClientContainer:
         from .s3_store import S3Store
 
         if storage_target == StorageTarget.R2:
+            return env.Env.get().get_client(
+                'r2', variant='resource', additional_args={'endpoint_url': soa.container_free_uri}
+            )
             client_args = S3Store.get_r2_client_args(soa)
             return S3Store.create_boto_resource(client_args)
         if storage_target == StorageTarget.S3:
+            return env.Env.get().get_client('s3', variant='resource')
             return S3Store.create_boto_resource({})
         raise ValueError(f'Unsupported storage target: {storage_target}')

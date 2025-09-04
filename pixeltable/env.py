@@ -604,23 +604,27 @@ class Env:
             )
         return self._pxt_api_key
 
-    def get_client(self, name: str) -> Any:
+    def get_client(self, name: str, variant: str = '', additional_args: Optional[dict[str, Any]] = None) -> Any:
         """
         Gets the client with the specified name, initializing it if necessary.
 
         Args:
             - name: The name of the client
         """
-        cl = _registered_clients[name]
-        if cl.client_obj is not None:
-            return cl.client_obj  # Already initialized
+        registry_name = f'{name}_{variant}' if variant else name
+        with _registered_clients_lock:
+            cl = _registered_clients[registry_name]
+            if cl.client_obj is not None:
+                return cl.client_obj  # Already initialized
 
-        # Construct a client, retrieving each parameter from config.
-
+        print(f'A =============> Getting `{name}` client.')
+        # Retrieve parameters required to construct the needed client.
         init_kwargs: dict[str, Any] = {}
+        print(f'A1 ============> {cl.params.values()}')
         for param in cl.params.values():
             # Determine the type of the parameter for proper config parsing.
             t = param.annotation
+            print(1, param.name, t)
             # Deference Optional[T]
             if typing.get_origin(t) in (typing.Union, types.UnionType):
                 args = typing.get_args(t)
@@ -628,20 +632,30 @@ class Env:
                     t = args[1]
                 elif args[1] is type(None):
                     t = args[0]
+            print(2, param.name, t, name)
             assert isinstance(t, type), t
+            print(3, param.name, t, name)
             arg: Any = Config.get().get_value(param.name, t, section=name)
+            print(f'4 =========> Getting params: param={param.name} arg={arg}')
             if arg is not None:
                 init_kwargs[param.name] = arg
+            elif param.name in additional_args:
+                init_kwargs[param.name] = additional_args[param.name]
             elif param.default is inspect.Parameter.empty:
                 raise excs.Error(
                     f'`{name}` client not initialized: parameter `{param.name}` is not configured.\n'
                     f'To fix this, specify the `{name.upper()}_{param.name.upper()}` environment variable, '
                     f'or put `{param.name.lower()}` in the `{name.lower()}` section of $PIXELTABLE_HOME/config.toml.'
                 )
+        print(f'B =============> Getting `{name}` client with parameters: {init_kwargs}.')
 
-        cl.client_obj = cl.init_fn(**init_kwargs)
-        self._logger.info(f'Initialized `{name}` client.')
-        return cl.client_obj
+        with _registered_clients_lock:
+            if cl.client_obj is not None:
+                return cl.client_obj  # Already initialized
+            print(f'C =============> Initializing `{name}` client with parameters: {init_kwargs}.')
+            cl.client_obj = cl.init_fn(**init_kwargs)
+            self._logger.info(f'Initialized `{name}` client with parameters: {init_kwargs}.')
+            return cl.client_obj
 
     def _start_web_server(self) -> None:
         """
@@ -887,7 +901,7 @@ class Env:
                 _logger.warning(f'Error removing handler: {e}')
 
 
-def register_client(name: str) -> Callable:
+def register_client(name: str, variant: str = '') -> Callable:
     """Decorator that registers a third-party API client for use by Pixeltable.
 
     The decorated function is an initialization wrapper for the client, and can have
@@ -915,11 +929,14 @@ def register_client(name: str) -> Callable:
     def decorator(fn: Callable) -> None:
         sig = inspect.signature(fn)
         params = dict(sig.parameters)
-        _registered_clients[name] = ApiClient(init_fn=fn, params=params)
+        registry_name = f'{name}_{variant}' if variant else name
+        with _registered_clients_lock:
+            _registered_clients[registry_name] = ApiClient(init_fn=fn, params=params)
 
     return decorator
 
 
+_registered_clients_lock: threading.Lock = threading.Lock()
 _registered_clients: dict[str, ApiClient] = {}
 
 
